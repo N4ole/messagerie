@@ -12,6 +12,7 @@ pub async fn cleanup_once(st: &AppState) -> Result<(), sqlx::Error> {
     // Rétention maximale des blobs non retirés.
     sqlx::query("DELETE FROM blobs WHERE expires_at < $1").bind(now).execute(db).await?;
     sqlx::query("DELETE FROM attachments WHERE expires_at < $1").bind(now).execute(db).await?;
+    sqlx::query("DELETE FROM webauthn_challenges WHERE expires_at < $1").bind(now).execute(db).await?;
     sqlx::query("DELETE FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.blob_id = b.id)")
         .execute(db)
         .await?;

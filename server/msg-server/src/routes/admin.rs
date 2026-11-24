@@ -203,6 +203,7 @@ pub async fn reset(
     .await?;
     let (id,) = row.ok_or_else(AppError::not_found)?;
     sqlx::query("DELETE FROM devices WHERE account_id = $1").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM webauthn_credentials WHERE account_id = $1").bind(id).execute(&mut *tx).await?;
     audit(&mut *tx, &ctx.username, "reset", &username).await?;
     tx.commit().await?;
     Ok(Json(ActivationCodeResponse { username, activation_code: code, expires_at: exp }))

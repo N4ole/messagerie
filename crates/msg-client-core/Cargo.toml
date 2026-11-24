@@ -26,6 +26,16 @@ tracing.workspace = true
 url = "2"
 uuid.workspace = true
 zeroize.workspace = true
+p256 = { version = "0.13", features = ["ecdsa"], optional = true }
+ciborium = { version = "0.2", optional = true }
+sha2 = { workspace = true, optional = true }
+
+[features]
+# Authentificateur FIDO2 logiciel, pour les tests uniquement.
+soft-authenticator = ["dep:p256", "dep:ciborium", "dep:sha2"]
 
 [dev-dependencies]
+p256 = { version = "0.13", features = ["ecdsa"] }
+ciborium = "0.2"
+sha2.workspace = true
 tempfile = "3"

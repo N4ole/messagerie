@@ -282,6 +282,33 @@ impl ApiClient {
         self.call(Method::POST, "/v1/queue/ack", Some(&AckRequest { ids })).await
     }
 
+    // --- WebAuthn -----------------------------------------------------------
+
+    pub async fn webauthn_login_challenge(&self, username: &str, password: &str) -> Result<WebauthnChallenge> {
+        self.public(
+            Method::POST,
+            "/v1/auth/webauthn/challenge",
+            Some(&WebauthnChallengeRequest { username: username.into(), password: password.into() }),
+        )
+        .await
+    }
+
+    pub async fn webauthn_register_start(&self) -> Result<WebauthnChallenge> {
+        self.call::<(), _>(Method::POST, "/v1/webauthn/register/start", None).await
+    }
+
+    pub async fn webauthn_register_finish(&self, req: &WebauthnRegisterFinish) -> Result<WebauthnCredentialSummary> {
+        self.call(Method::POST, "/v1/webauthn/register/finish", Some(req)).await
+    }
+
+    pub async fn webauthn_list(&self) -> Result<Vec<WebauthnCredentialSummary>> {
+        self.call::<(), _>(Method::GET, "/v1/webauthn/credentials", None).await
+    }
+
+    pub async fn webauthn_delete(&self, id: i64) -> Result<()> {
+        self.call::<(), ()>(Method::DELETE, &format!("/v1/webauthn/credentials/{id}"), None).await
+    }
+
     // --- Administration ---------------------------------------------------
 
     pub async fn admin_create(&self, username: &str, role: Role) -> Result<ActivationCodeResponse> {

@@ -477,3 +477,67 @@ async fn attachments_are_cleaned_and_encrypted() {
     let id = bob.messages(&c.id, 10).unwrap().last().unwrap().id.clone();
     assert_eq!(&bob.download_file(&id).await.unwrap().data[..], &pdf[..]);
 }
+
+/// Passkeys / clés de sécurité : enregistrement, connexion sans TOTP,
+/// défi à usage unique, refus d'une autre clé, suppression.
+#[tokio::test(flavor = "multi_thread")]
+async fn passkey_second_factor() {
+    use msg_client_core::passkey::soft::SoftAuthenticator;
+    use std::sync::Arc;
+
+    let mut s = spawn_webauthn().await;
+    let admin = s.admin().await;
+    let (alice, alice_cfg, _) = s.user(&admin, "alice").await;
+    let yubikey: Arc<SoftAuthenticator> = Arc::new(SoftAuthenticator::default());
+
+    // Pas encore de clé : le défi de connexion est refusé.
+    drop(alice);
+    assert!(Client::login_with_passkey(&alice_cfg, "alice", password(), yubikey.clone()).await.is_err());
+
+    let alice = Client::login(&alice_cfg, "alice", password(), None).await.unwrap();
+    let k = alice.register_passkey("YubiKey bureau", yubikey.clone()).await.unwrap();
+    assert_eq!(k.name, "YubiKey bureau");
+    assert_eq!(alice.passkeys().await.unwrap().len(), 1);
+    alice.logout().await.unwrap();
+
+    // Connexion mot de passe + clé, sans TOTP.
+    let alice = Client::login_with_passkey(&alice_cfg, "alice", password(), yubikey.clone()).await.unwrap();
+    assert!(alice.passkeys().await.unwrap()[0].last_used_at.is_some());
+    alice.logout().await.unwrap();
+
+    // Mauvais mot de passe : pas de défi (et l'échec est compté).
+    assert!(Client::login_with_passkey(&alice_cfg, "alice", &wrong_password(), yubikey.clone()).await.is_err());
+
+    // Signature altérée : refusée par le serveur (vérification webauthn-rs).
+    struct Tamper(Arc<SoftAuthenticator>);
+    impl msg_client_core::passkey::RawAuthenticator for Tamper {
+        fn make_credential(
+            &self,
+            r: &msg_client_core::passkey::MakeCredentialRequest,
+        ) -> msg_client_core::Result<msg_client_core::passkey::MakeCredentialResponse> {
+            self.0.make_credential(r)
+        }
+        fn get_assertion(
+            &self,
+            r: &msg_client_core::passkey::GetAssertionRequest,
+        ) -> msg_client_core::Result<msg_client_core::passkey::GetAssertionResponse> {
+            let mut a = self.0.get_assertion(r)?;
+            let n = a.signature.len();
+            a.signature[n - 3] ^= 0x01;
+            Ok(a)
+        }
+    }
+    let e = Client::login_with_passkey(&alice_cfg, "alice", password(), Arc::new(Tamper(yubikey.clone()))).await;
+    assert_eq!(e.err().and_then(|e| e.api_code()), Some(msg_proto::ErrorCode::InvalidCredentials));
+
+    // Une autre clé (non enregistrée) est refusée.
+    let other: Arc<SoftAuthenticator> = Arc::new(SoftAuthenticator::default());
+    assert!(Client::login_with_passkey(&alice_cfg, "alice", password(), other).await.is_err());
+
+    // Suppression : la clé ne permet plus de se connecter.
+    let alice = Client::login_with_passkey(&alice_cfg, "alice", password(), yubikey.clone()).await.unwrap();
+    let id = alice.passkeys().await.unwrap()[0].id;
+    alice.delete_passkey(id).await.unwrap();
+    alice.logout().await.unwrap();
+    assert!(Client::login_with_passkey(&alice_cfg, "alice", password(), yubikey).await.is_err());
+}

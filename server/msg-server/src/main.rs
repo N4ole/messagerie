@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Serve { bind } => {
             let cfg = Config::from_env()?;
-            let st = AppState::new(pool, cfg);
+            let st = AppState::try_new(pool, cfg)?;
             tasks::spawn(st.clone());
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!(%bind, "serveur démarré");

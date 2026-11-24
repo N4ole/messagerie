@@ -166,30 +166,7 @@ impl Client {
     /// Sans code TOTP, tente de reprendre la session existante ; si elle a
     /// expiré, renvoie [`ClientError::TotpRequired`].
     pub async fn login(cfg: &ClientConfig, username: &str, password: &str, totp_code: Option<&str>) -> Result<Self> {
-        validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
-        let paths = cfg.paths(username);
-        if !paths.exists() {
-            return Err(ClientError::NoLocalAccount);
-        }
-        let key = vault::open(&paths, password)?;
-        let store = LocalStore::open(&paths.db, &key)?;
-        drop(key);
-        let stored_name = get_meta(&store, meta::USERNAME)?;
-        if stored_name.as_slice() != username.as_bytes() {
-            return Err(ClientError::Storage("compte local incohérent".into()));
-        }
-        let device_id =
-            Uuid::from_slice(&get_meta(&store, meta::DEVICE_ID)?).map_err(|e| ClientError::Storage(e.to_string()))?;
-        let identity = SigningKeyPair::from_secret_bytes(&get_meta(&store, meta::IDENTITY_SECRET)?)?;
-        let api_key = SigningKeyPair::from_secret_bytes(&get_meta(&store, meta::API_SECRET)?)?;
-        let mls = MlsClient::restore(
-            MemberIdentity { username: username.into(), device_id },
-            &get_meta(&store, meta::MLS_PUBLIC)?,
-            &get_meta(&store, meta::MLS_STATE)?,
-        )?;
-        let mut api = cfg.api()?;
-        api.set_device(DeviceAuth { device_id, api_key });
-        let client = Self { api, store, mls, identity, username: username.into(), device_id };
+        let client = Self::open_local(cfg, username, password)?;
         match totp_code.map(str::trim).filter(|c| !c.is_empty()) {
             Some(code) => {
                 let reg = client.registration()?;
@@ -199,6 +176,7 @@ impl Client {
                         username: username.into(),
                         password: password.into(),
                         totp_code: code.into(),
+                        webauthn: None,
                         device: reg,
                     })
                     .await?;
@@ -222,7 +200,39 @@ impl Client {
         Ok(client)
     }
 
-    fn registration(&self) -> Result<DeviceRegistration> {
+    /// Déverrouille le compte local (coffre + base) sans contacter le serveur.
+    pub(crate) fn open_local(cfg: &ClientConfig, username: &str, password: &str) -> Result<Self> {
+        validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
+        let paths = cfg.paths(username);
+        if !paths.exists() {
+            return Err(ClientError::NoLocalAccount);
+        }
+        let key = vault::open(&paths, password)?;
+        let store = LocalStore::open(&paths.db, &key)?;
+        // Renforcement opportuniste (TPM apparu depuis la création du coffre).
+        if let Err(e) = vault::harden(&paths, &key, password, cfg.argon2) {
+            tracing::warn!(error = %e, "renforcement TPM du coffre impossible");
+        }
+        drop(key);
+        let stored_name = get_meta(&store, meta::USERNAME)?;
+        if stored_name.as_slice() != username.as_bytes() {
+            return Err(ClientError::Storage("compte local incohérent".into()));
+        }
+        let device_id =
+            Uuid::from_slice(&get_meta(&store, meta::DEVICE_ID)?).map_err(|e| ClientError::Storage(e.to_string()))?;
+        let identity = SigningKeyPair::from_secret_bytes(&get_meta(&store, meta::IDENTITY_SECRET)?)?;
+        let api_key = SigningKeyPair::from_secret_bytes(&get_meta(&store, meta::API_SECRET)?)?;
+        let mls = MlsClient::restore(
+            MemberIdentity { username: username.into(), device_id },
+            &get_meta(&store, meta::MLS_PUBLIC)?,
+            &get_meta(&store, meta::MLS_STATE)?,
+        )?;
+        let mut api = cfg.api()?;
+        api.set_device(DeviceAuth { device_id, api_key });
+        Ok(Self { api, store, mls, identity, username: username.into(), device_id })
+    }
+
+    pub(crate) fn registration(&self) -> Result<DeviceRegistration> {
         let ts: [u8; 8] = get_meta(&self.store, meta::CERT_CREATED_AT)?
             .as_slice()
             .try_into()
@@ -238,7 +248,7 @@ impl Client {
         })
     }
 
-    fn save_session(&self, t: &SessionTokens) -> Result<()> {
+    pub(crate) fn save_session(&self, t: &SessionTokens) -> Result<()> {
         let json = Zeroizing::new(serde_json::to_vec(t).map_err(|e| ClientError::Storage(e.to_string()))?);
         self.store.set_meta(meta::SESSION, &json)
     }
@@ -285,6 +295,11 @@ impl Client {
 
     pub fn device_id(&self) -> Uuid {
         self.device_id
+    }
+
+    /// Protection du coffre local (`none`, `dpapi`, `tpm+dpapi`…).
+    pub fn vault_protection(&self, cfg: &ClientConfig) -> String {
+        vault::protection(&cfg.paths(&self.username)).unwrap_or_else(|_| "inconnue".into())
     }
 
     pub fn identity_fingerprint(&self) -> String {

@@ -245,8 +245,57 @@ pub struct ConfirmTotpRequest {
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
+    /// Second facteur TOTP (ignoré si `webauthn` est fourni).
+    #[serde(default)]
     pub totp_code: String,
+    /// Second facteur WebAuthn (passkey / clé de sécurité FIDO2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webauthn: Option<WebauthnAssertion>,
     pub device: DeviceRegistration,
+}
+
+// ---------------------------------------------------------------------------
+// WebAuthn (passkeys, YubiKey)
+// ---------------------------------------------------------------------------
+
+/// Réponse d'un authentificateur à un défi de connexion.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnAssertion {
+    pub challenge_id: Uuid,
+    /// `PublicKeyCredential` au format JSON WebAuthn (Base64URL).
+    pub credential: serde_json::Value,
+}
+
+/// Demande de défi de connexion : le mot de passe est vérifié d'abord.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct WebauthnChallengeRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// Défi WebAuthn (création ou authentification).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnChallenge {
+    pub challenge_id: Uuid,
+    /// `CreationChallengeResponse` ou `RequestChallengeResponse` (JSON WebAuthn).
+    pub options: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnRegisterFinish {
+    pub challenge_id: Uuid,
+    /// Nom choisi par l'utilisateur (« YubiKey bureau »…).
+    pub name: String,
+    /// `RegisterPublicKeyCredential` au format JSON WebAuthn.
+    pub credential: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnCredentialSummary {
+    pub id: i64,
+    pub name: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

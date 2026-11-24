@@ -11,6 +11,7 @@ pub mod attachments;
 pub mod client;
 pub mod conversations;
 pub mod error;
+pub mod passkey;
 pub mod store;
 pub mod vault;
 

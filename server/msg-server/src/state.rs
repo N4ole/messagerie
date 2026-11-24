@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::secrets::ServerSecrets;
+use webauthn_rs::Webauthn;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -22,14 +23,32 @@ pub struct Inner {
     /// Notifications « nouveaux messages » par appareil (instance unique en
     /// Phase 1 ; un bus inter-instances viendra en Phase 4).
     pub hub: broadcast::Sender<Uuid>,
+    /// Vérificateur WebAuthn (absent si non configuré).
+    pub webauthn: Option<Webauthn>,
     send_rate: Mutex<HashMap<Uuid, (i64, u32)>>,
 }
 
 impl AppState {
     pub fn new(db: PgPool, cfg: Config) -> Self {
+        Self::try_new(db, cfg).expect("configuration WebAuthn invalide")
+    }
+
+    pub fn try_new(db: PgPool, cfg: Config) -> anyhow::Result<Self> {
         let secrets = ServerSecrets::derive(&cfg.server_secret);
         let (hub, _) = broadcast::channel(4096);
-        Self { inner: Arc::new(Inner { db, cfg, secrets, hub, send_rate: Mutex::new(HashMap::new()) }) }
+        let webauthn = match &cfg.webauthn {
+            Some(w) => {
+                let origin = url::Url::parse(&w.origin)?;
+                Some(
+                    webauthn_rs::WebauthnBuilder::new(&w.rp_id, &origin)?
+                        .rp_name(&cfg.site_name)
+                        .timeout(std::time::Duration::from_secs(120))
+                        .build()?,
+                )
+            }
+            None => None,
+        };
+        Ok(Self { inner: Arc::new(Inner { db, cfg, secrets, hub, webauthn, send_rate: Mutex::new(HashMap::new()) }) })
     }
 
     pub fn db(&self) -> &PgPool {

@@ -6,10 +6,11 @@ use axum::{Extension, Json};
 use msg_crypto::identity::DeviceCertificate;
 use msg_proto::{
     validate_password, AccountStatus, ActivateRequest, ActivateResponse, ConfirmTotpRequest, DeviceRegistration,
-    ErrorCode, LoginRequest, RefreshRequest, SessionTokens,
+    ErrorCode, LoginRequest, RefreshRequest, SessionTokens, WebauthnAssertion,
 };
 use sqlx::{Postgres, Transaction};
 use subtle::ConstantTimeEq;
+use webauthn_rs::prelude::{Passkey, PasskeyAuthentication, PublicKeyCredential};
 
 use crate::auth::{AuthContext, SignedDevice};
 use crate::error::{AppError, AppResult};
@@ -20,8 +21,8 @@ use crate::state::AppState;
 const MAX_DEVICES: i64 = 10;
 
 #[derive(sqlx::FromRow)]
-struct AccountRow {
-    id: i64,
+pub(crate) struct AccountRow {
+    pub(crate) id: i64,
     status: String,
     password_hash: Option<String>,
     totp_secret_enc: Option<Vec<u8>>,
@@ -106,13 +107,76 @@ pub async fn activate(
     Ok(Json(ActivateResponse { totp_secret_base32: passwords::totp_base32(&secret), otpauth_uri: t.get_url() }))
 }
 
-/// Vérifie mot de passe + TOTP, avec verrouillage progressif.
-async fn check_credentials(
+/// Second facteur présenté avec le mot de passe.
+pub(crate) enum SecondFactor<'a> {
+    Totp(&'a str),
+    Webauthn(&'a WebauthnAssertion),
+    /// Mot de passe seul : uniquement pour délivrer un défi WebAuthn.
+    PasswordOnly,
+}
+
+async fn record_failure(st: &AppState, tx: &mut Transaction<'_, Postgres>, acc: &AccountRow) -> AppResult<()> {
+    let now = crate::now();
+    let failed = acc.failed_logins + 1;
+    let (failed, locked) =
+        if failed >= st.cfg().max_failed_logins { (0, Some(now + st.cfg().lockout_secs)) } else { (failed, None) };
+    sqlx::query("UPDATE accounts SET failed_logins = $2, locked_until = COALESCE($3, locked_until) WHERE id = $1")
+        .bind(acc.id)
+        .bind(failed)
+        .bind(locked)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Vérifie l'assertion WebAuthn d'un défi d'authentification (usage unique).
+async fn verify_webauthn(
+    st: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    account_id: i64,
+    a: &WebauthnAssertion,
+) -> AppResult<bool> {
+    let Some(wa) = st.inner.webauthn.as_ref() else { return Ok(false) };
+    let row: Option<(String,)> = sqlx::query_as(
+        "DELETE FROM webauthn_challenges WHERE id = $1 AND account_id = $2 AND kind = 'authenticate' AND expires_at > $3
+         RETURNING state",
+    )
+    .bind(a.challenge_id)
+    .bind(account_id)
+    .bind(crate::now())
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((state,)) = row else { return Ok(false) };
+    let Ok(state) = serde_json::from_str::<PasskeyAuthentication>(&state) else { return Ok(false) };
+    let Ok(cred) = serde_json::from_value::<PublicKeyCredential>(a.credential.clone()) else { return Ok(false) };
+    let Ok(result) = wa.finish_passkey_authentication(&cred, &state) else { return Ok(false) };
+    let cred_id: &[u8] = result.cred_id().as_ref();
+    let stored: Option<(i64, String)> = sqlx::query_as(
+        "SELECT id, passkey FROM webauthn_credentials WHERE account_id = $1 AND credential_id = $2 FOR UPDATE",
+    )
+    .bind(account_id)
+    .bind(cred_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((id, pk)) = stored else { return Ok(false) };
+    let mut passkey: Passkey = serde_json::from_str(&pk).map_err(|e| anyhow::anyhow!(e))?;
+    passkey.update_credential(&result);
+    sqlx::query("UPDATE webauthn_credentials SET passkey = $2, last_used_at = $3 WHERE id = $1")
+        .bind(id)
+        .bind(serde_json::to_string(&passkey).map_err(|e| anyhow::anyhow!(e))?)
+        .bind(crate::now())
+        .execute(&mut **tx)
+        .await?;
+    Ok(true)
+}
+
+/// Vérifie mot de passe + second facteur, avec verrouillage progressif.
+pub(crate) async fn check_credentials(
     st: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     username: &str,
     password: &str,
-    totp_code: &str,
+    second: SecondFactor<'_>,
     expected_status: AccountStatus,
 ) -> AppResult<AccountRow> {
     let now = crate::now();
@@ -130,29 +194,26 @@ async fn check_credentials(
     let Some(acc) = acc else {
         return Err(AppError::invalid_credentials());
     };
-    let totp_step = if pw_ok {
-        match acc.totp_secret_enc.as_deref() {
-            Some(sealed) => {
-                let secret = st.inner.secrets.open_totp(username, sealed)?;
-                let t = passwords::totp(&secret, &st.cfg().site_name, username)?;
-                passwords::check_totp(&t, totp_code, now, acc.totp_last_step)
-            }
-            None => None,
-        }
-    } else {
+    // (vérifié, pas TOTP consommé)
+    let outcome: Option<Option<i64>> = if !pw_ok {
         None
+    } else {
+        match second {
+            SecondFactor::Totp(code) => match acc.totp_secret_enc.as_deref() {
+                Some(sealed) => {
+                    let secret = st.inner.secrets.open_totp(username, sealed)?;
+                    let t = passwords::totp(&secret, &st.cfg().site_name, username)?;
+                    passwords::check_totp(&t, code, now, acc.totp_last_step).map(Some)
+                }
+                None => None,
+            },
+            SecondFactor::Webauthn(a) => verify_webauthn(st, tx, acc.id, a).await?.then_some(None),
+            SecondFactor::PasswordOnly => Some(None),
+        }
     };
-    let Some(step) = totp_step else {
-        let failed = acc.failed_logins + 1;
-        let (failed, locked) =
-            if failed >= st.cfg().max_failed_logins { (0, Some(now + st.cfg().lockout_secs)) } else { (failed, None) };
-        sqlx::query("UPDATE accounts SET failed_logins = $2, locked_until = COALESCE($3, locked_until) WHERE id = $1")
-            .bind(acc.id)
-            .bind(failed)
-            .bind(locked)
-            .execute(&mut **tx)
-            .await?;
-        // Pas de distinction mot de passe / TOTP dans la réponse.
+    let Some(step) = outcome else {
+        record_failure(st, tx, &acc).await?;
+        // Pas de distinction mot de passe / second facteur dans la réponse.
         return Err(AppError::invalid_credentials());
     };
     if acc.status == AccountStatus::Suspended.as_str() {
@@ -161,11 +222,17 @@ async fn check_credentials(
     if acc.status != expected_status.as_str() {
         return Err(AppError::new(StatusCode::FORBIDDEN, ErrorCode::AccountNotActive, "compte non activé"));
     }
-    sqlx::query("UPDATE accounts SET failed_logins = 0, locked_until = NULL, totp_last_step = $2 WHERE id = $1")
-        .bind(acc.id)
-        .bind(step)
-        .execute(&mut **tx)
-        .await?;
+    if matches!(second, SecondFactor::PasswordOnly) {
+        // Authentification partielle : le compteur d'échecs n'est pas remis à zéro.
+        return Ok(acc);
+    }
+    sqlx::query(
+        "UPDATE accounts SET failed_logins = 0, locked_until = NULL, totp_last_step = COALESCE($2, totp_last_step) WHERE id = $1",
+    )
+    .bind(acc.id)
+    .bind(step)
+    .execute(&mut **tx)
+    .await?;
     Ok(acc)
 }
 
@@ -284,8 +351,8 @@ pub async fn confirm_totp(
     Json(req): Json<ConfirmTotpRequest>,
 ) -> AppResult<Json<SessionTokens>> {
     let mut tx = st.db().begin().await?;
-    let res =
-        check_credentials(&st, &mut tx, &req.username, &req.password, &req.totp_code, AccountStatus::PendingTotp).await;
+    let second = SecondFactor::Totp(&req.totp_code);
+    let res = check_credentials(&st, &mut tx, &req.username, &req.password, second, AccountStatus::PendingTotp).await;
     let acc = match res {
         Ok(a) => a,
         Err(e) => {
@@ -302,8 +369,11 @@ pub async fn confirm_totp(
 
 pub async fn login(State(st): State<AppState>, Json(req): Json<LoginRequest>) -> AppResult<Json<SessionTokens>> {
     let mut tx = st.db().begin().await?;
-    let res =
-        check_credentials(&st, &mut tx, &req.username, &req.password, &req.totp_code, AccountStatus::Active).await;
+    let second = match &req.webauthn {
+        Some(a) => SecondFactor::Webauthn(a),
+        None => SecondFactor::Totp(&req.totp_code),
+    };
+    let res = check_credentials(&st, &mut tx, &req.username, &req.password, second, AccountStatus::Active).await;
     let acc = match res {
         Ok(a) => a,
         Err(e) => {

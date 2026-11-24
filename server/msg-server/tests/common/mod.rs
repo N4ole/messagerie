@@ -57,6 +57,15 @@ pub struct TestServer {
 }
 
 pub async fn spawn() -> TestServer {
+    spawn_with(false).await
+}
+
+/// Serveur avec WebAuthn activé (origine `http://localhost:<port>`).
+pub async fn spawn_webauthn() -> TestServer {
+    spawn_with(true).await
+}
+
+async fn spawn_with(webauthn: bool) -> TestServer {
     logs();
     let base = std::env::var("DATABASE_URL").expect(
         "DATABASE_URL doit pointer vers un PostgreSQL de test (ex. postgres://postgres@127.0.0.1:5433/postgres)",
@@ -68,14 +77,18 @@ pub async fn spawn() -> TestServer {
     url.set_path(&name);
     let pool = PgPoolOptions::new().max_connections(10).connect(url.as_str()).await.unwrap();
     msg_server::migrate(&pool).await.unwrap();
-    let mut cfg = Config::with_secret("test".into(), [42; 32]);
+    let mut cfg = Config::with_secret("test".into(), msg_crypto::random_bytes::<32>().unwrap());
     cfg.argon2_m_kib = 64;
     cfg.argon2_t = 1;
-    let app = router(AppState::new(pool.clone(), cfg));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let url = if webauthn { format!("http://localhost:{}", addr.port()) } else { format!("http://{addr}") };
+    if webauthn {
+        cfg.webauthn = Some(msg_server::config::WebauthnConfig { rp_id: "localhost".into(), origin: url.clone() });
+    }
+    let app = router(AppState::try_new(pool.clone(), cfg).expect("configuration"));
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    TestServer { url: format!("http://{addr}"), pool, dirs: Vec::new() }
+    TestServer { url, pool, dirs: Vec::new() }
 }
 
 pub fn totp_code(base32: &str, offset_steps: i64) -> String {

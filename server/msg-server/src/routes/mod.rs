@@ -5,6 +5,7 @@ pub mod admin;
 pub mod attachments;
 pub mod keys;
 pub mod messages;
+pub mod webauthn;
 pub mod ws;
 
 use axum::extract::DefaultBodyLimit;
@@ -25,7 +26,8 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/health", get(health))
         .route("/v1/auth/activate", post(account::activate))
         .route("/v1/auth/confirm-totp", post(account::confirm_totp))
-        .route("/v1/auth/login", post(account::login));
+        .route("/v1/auth/login", post(account::login))
+        .route("/v1/auth/webauthn/challenge", post(webauthn::login_challenge));
 
     let signed = Router::new()
         .route("/v1/auth/refresh", post(account::refresh))
@@ -46,6 +48,10 @@ pub fn router(st: AppState) -> Router {
         )
         .route("/v1/attachments/{id}", get(attachments::download))
         .route("/v1/ws", get(ws::handler))
+        .route("/v1/webauthn/register/start", post(webauthn::register_start))
+        .route("/v1/webauthn/register/finish", post(webauthn::register_finish))
+        .route("/v1/webauthn/credentials", get(webauthn::list))
+        .route("/v1/webauthn/credentials/{id}", delete(webauthn::delete))
         .route("/v1/admin/accounts", get(admin::list).post(admin::create))
         .route("/v1/admin/accounts/{username}/status", put(admin::set_status))
         .route("/v1/admin/accounts/{username}/role", put(admin::set_role))
