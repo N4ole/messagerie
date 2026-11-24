@@ -1,6 +1,6 @@
 # Image du serveur : compilation multi-étapes, exécution sur une base
 # distroless sans shell, en utilisateur non privilégié.
-FROM rust:1.97-bookworm AS build
+FROM rust:1.99-bookworm AS build
 WORKDIR /src
 COPY . .
 RUN cargo build --release --locked -p msg-server \
