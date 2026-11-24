@@ -14,10 +14,14 @@
 
 use std::sync::Arc;
 
-use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use msg_proto::webauthn::{
+    AuthenticationExtensionsClientOutputs, AuthenticatorAssertionResponseRaw, AuthenticatorAttestationResponseRaw,
+    CreationChallengeResponse, PublicKeyCredential, RegisterPublicKeyCredential, RegistrationExtensionsClientOutputs,
+    RequestChallengeResponse, UserVerificationPolicy,
+};
 use msg_proto::{WebauthnAssertion, WebauthnCredentialSummary, WebauthnRegisterFinish};
-use serde_json::{json, Value};
 use url::Url;
 
 use crate::client::{Client, ClientConfig};
@@ -69,33 +73,13 @@ fn b64url(b: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(b)
 }
 
-/// Décode le Base64 (URL ou standard, avec ou sans remplissage).
-fn b64_any(s: &str) -> Result<Vec<u8>> {
-    URL_SAFE_NO_PAD
-        .decode(s)
-        .or_else(|_| URL_SAFE.decode(s))
-        .or_else(|_| STANDARD.decode(s))
-        .or_else(|_| STANDARD_NO_PAD.decode(s))
-        .map_err(|_| ClientError::Invalid("Base64 invalide dans le défi WebAuthn".into()))
-}
-
-fn field<'a>(v: &'a Value, path: &[&str]) -> Result<&'a Value> {
-    let mut cur = v;
-    for p in path {
-        cur = cur.get(*p).ok_or_else(|| ClientError::Invalid(format!("défi WebAuthn incomplet ({p})")))?;
+fn uv(p: &UserVerificationPolicy) -> String {
+    match p {
+        UserVerificationPolicy::Required => "required",
+        UserVerificationPolicy::Preferred => "preferred",
+        UserVerificationPolicy::Discouraged_DO_NOT_USE => "discouraged",
     }
-    Ok(cur)
-}
-
-fn str_field(v: &Value, path: &[&str]) -> Result<String> {
-    field(v, path)?.as_str().map(str::to_owned).ok_or_else(|| ClientError::Invalid("défi WebAuthn invalide".into()))
-}
-
-fn cred_ids(list: Option<&Value>) -> Result<Vec<Vec<u8>>> {
-    match list.and_then(Value::as_array) {
-        None => Ok(Vec::new()),
-        Some(a) => a.iter().map(|c| b64_any(c.get("id").and_then(Value::as_str).unwrap_or_default())).collect(),
-    }
+    .into()
 }
 
 /// Origine attendue et contrôle du `rpId` par rapport au serveur configuré.
@@ -112,83 +96,90 @@ pub fn check_rp(server: &Url, rp_id: &str) -> Result<String> {
     Ok(server.origin().ascii_serialization())
 }
 
-fn client_data(kind: &str, challenge_b64: &str, origin: &str) -> Result<Vec<u8>> {
-    // Le défi est réencodé en Base64URL sans remplissage, comme un navigateur.
-    let challenge = b64url(&b64_any(challenge_b64)?);
-    Ok(serde_json::to_vec(&json!({ "type": kind, "challenge": challenge, "origin": origin, "crossOrigin": false }))
-        .expect("JSON valide"))
+/// `clientDataJSON` tel qu'un navigateur le construirait (WebAuthn §5.8.1).
+fn client_data(kind: &str, challenge: &[u8], origin: &str) -> Vec<u8> {
+    #[derive(serde::Serialize)]
+    struct ClientData<'a> {
+        #[serde(rename = "type")]
+        kind: &'a str,
+        challenge: String,
+        origin: &'a str,
+        #[serde(rename = "crossOrigin")]
+        cross_origin: bool,
+    }
+    serde_json::to_vec(&ClientData { kind, challenge: b64url(challenge), origin, cross_origin: false })
+        .expect("sérialisation infaillible")
 }
 
-/// Exécute une cérémonie d'enregistrement et produit le
-/// `RegisterPublicKeyCredential` JSON attendu par le serveur.
-pub fn create_credential(server: &Url, options: &Value, auth: &dyn RawAuthenticator) -> Result<Value> {
-    let pk = field(options, &["publicKey"])?;
-    let rp_id = str_field(pk, &["rp", "id"])?;
-    let origin = check_rp(server, &rp_id)?;
-    let cdj = client_data("webauthn.create", &str_field(pk, &["challenge"])?, &origin)?;
-    let algorithms = pk
-        .get("pubKeyCredParams")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|p| p.get("alg").and_then(Value::as_i64)).collect())
-        .unwrap_or_else(|| vec![-7]);
-    let sel = pk.get("authenticatorSelection");
+const DEFAULT_TIMEOUT_MS: u32 = 120_000;
+const MAX_TIMEOUT_MS: u32 = 600_000;
+
+/// Exécute une cérémonie d'enregistrement.
+pub fn create_credential(
+    server: &Url,
+    options: &CreationChallengeResponse,
+    auth: &dyn RawAuthenticator,
+) -> Result<RegisterPublicKeyCredential> {
+    let pk = &options.public_key;
+    let origin = check_rp(server, &pk.rp.id)?;
+    let cdj = client_data("webauthn.create", &pk.challenge, &origin);
+    let sel = pk.authenticator_selection.as_ref();
     let req = MakeCredentialRequest {
-        rp_name: pk.get("rp").and_then(|r| r.get("name")).and_then(Value::as_str).unwrap_or(&rp_id).to_owned(),
-        rp_id,
-        user_id: b64_any(&str_field(pk, &["user", "id"])?)?,
-        user_name: str_field(pk, &["user", "name"])?,
-        user_display_name: str_field(pk, &["user", "displayName"])?,
+        rp_id: pk.rp.id.clone(),
+        rp_name: pk.rp.name.clone(),
+        user_id: pk.user.id.clone(),
+        user_name: pk.user.name.clone(),
+        user_display_name: pk.user.display_name.clone(),
         client_data_json: cdj.clone(),
-        algorithms,
-        exclude_credentials: cred_ids(pk.get("excludeCredentials"))?,
-        require_resident_key: sel.and_then(|s| s.get("requireResidentKey")).and_then(Value::as_bool).unwrap_or(false),
-        user_verification: sel
-            .and_then(|s| s.get("userVerification"))
-            .and_then(Value::as_str)
-            .unwrap_or("preferred")
-            .to_owned(),
-        timeout_ms: pk.get("timeout").and_then(Value::as_u64).unwrap_or(120_000).min(600_000) as u32,
+        algorithms: pk.pub_key_cred_params.iter().map(|p| p.alg).collect(),
+        exclude_credentials: pk.exclude_credentials.iter().flatten().map(|c| c.id.clone()).collect(),
+        require_resident_key: sel.is_some_and(|s| s.require_resident_key),
+        user_verification: sel.map(|s| uv(&s.user_verification)).unwrap_or_else(|| "preferred".into()),
+        timeout_ms: pk.timeout.unwrap_or(DEFAULT_TIMEOUT_MS).min(MAX_TIMEOUT_MS),
     };
     let r = auth.make_credential(&req)?;
-    Ok(json!({
-        "id": b64url(&r.credential_id),
-        "rawId": b64url(&r.credential_id),
-        "type": "public-key",
-        "response": {
-            "attestationObject": b64url(&r.attestation_object),
-            "clientDataJSON": b64url(&cdj),
+    Ok(RegisterPublicKeyCredential {
+        id: b64url(&r.credential_id),
+        raw_id: r.credential_id,
+        response: AuthenticatorAttestationResponseRaw {
+            attestation_object: r.attestation_object,
+            client_data_json: cdj,
+            transports: None,
         },
-        "extensions": {},
-    }))
+        type_: "public-key".into(),
+        extensions: RegistrationExtensionsClientOutputs::default(),
+    })
 }
 
-/// Exécute une cérémonie d'authentification et produit le
-/// `PublicKeyCredential` JSON attendu par le serveur.
-pub fn get_assertion(server: &Url, options: &Value, auth: &dyn RawAuthenticator) -> Result<Value> {
-    let pk = field(options, &["publicKey"])?;
-    let rp_id = str_field(pk, &["rpId"])?;
-    let origin = check_rp(server, &rp_id)?;
-    let cdj = client_data("webauthn.get", &str_field(pk, &["challenge"])?, &origin)?;
+/// Exécute une cérémonie d'authentification.
+pub fn get_assertion(
+    server: &Url,
+    options: &RequestChallengeResponse,
+    auth: &dyn RawAuthenticator,
+) -> Result<PublicKeyCredential> {
+    let pk = &options.public_key;
+    let origin = check_rp(server, &pk.rp_id)?;
+    let cdj = client_data("webauthn.get", &pk.challenge, &origin);
     let req = GetAssertionRequest {
-        rp_id,
+        rp_id: pk.rp_id.clone(),
         client_data_json: cdj.clone(),
-        allow_credentials: cred_ids(pk.get("allowCredentials"))?,
-        user_verification: pk.get("userVerification").and_then(Value::as_str).unwrap_or("preferred").to_owned(),
-        timeout_ms: pk.get("timeout").and_then(Value::as_u64).unwrap_or(120_000).min(600_000) as u32,
+        allow_credentials: pk.allow_credentials.iter().map(|c| c.id.clone()).collect(),
+        user_verification: uv(&pk.user_verification),
+        timeout_ms: pk.timeout.unwrap_or(DEFAULT_TIMEOUT_MS).min(MAX_TIMEOUT_MS),
     };
     let r = auth.get_assertion(&req)?;
-    Ok(json!({
-        "id": b64url(&r.credential_id),
-        "rawId": b64url(&r.credential_id),
-        "type": "public-key",
-        "response": {
-            "authenticatorData": b64url(&r.authenticator_data),
-            "clientDataJSON": b64url(&cdj),
-            "signature": b64url(&r.signature),
-            "userHandle": r.user_handle.as_deref().map(b64url),
+    Ok(PublicKeyCredential {
+        id: b64url(&r.credential_id),
+        raw_id: r.credential_id,
+        response: AuthenticatorAssertionResponseRaw {
+            authenticator_data: r.authenticator_data,
+            client_data_json: cdj,
+            signature: r.signature,
+            user_handle: r.user_handle,
         },
-        "extensions": {},
-    }))
+        extensions: AuthenticationExtensionsClientOutputs::default(),
+        type_: "public-key".into(),
+    })
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
@@ -354,6 +345,7 @@ pub mod soft {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use msg_proto::webauthn::{AllowCredentials, PublicKeyCredentialRequestOptions};
 
     #[test]
     fn rp_id_is_pinned_to_server() {
@@ -368,8 +360,32 @@ mod tests {
     #[test]
     fn foreign_rp_challenge_is_refused_before_touching_authenticator() {
         let auth = soft::SoftAuthenticator::default();
-        let opts = json!({"publicKey": {"rpId": "banque.example", "challenge": "AAAA", "allowCredentials": []}});
+        let opts = RequestChallengeResponse {
+            public_key: PublicKeyCredentialRequestOptions {
+                challenge: vec![0; 32],
+                timeout: None,
+                rp_id: "banque.example".into(),
+                allow_credentials: vec![AllowCredentials {
+                    type_: "public-key".into(),
+                    id: vec![1; 16],
+                    transports: None,
+                }],
+                user_verification: UserVerificationPolicy::Required,
+                hints: None,
+                extensions: None,
+            },
+            mediation: None,
+        };
         let u = Url::parse("https://chat.exemple.org").unwrap();
         assert!(matches!(get_assertion(&u, &opts, &auth), Err(ClientError::Verification(..))));
+    }
+
+    #[test]
+    fn client_data_matches_webauthn_format() {
+        let cdj = client_data("webauthn.get", &[0xfb, 0xff], "https://chat.exemple.org");
+        assert_eq!(
+            std::str::from_utf8(&cdj).unwrap(),
+            r#"{"type":"webauthn.get","challenge":"-_8","origin":"https://chat.exemple.org","crossOrigin":false}"#
+        );
     }
 }

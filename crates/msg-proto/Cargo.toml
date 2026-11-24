@@ -9,10 +9,11 @@ publish.workspace = true
 [dependencies]
 base64.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 uuid.workspace = true
+webauthn-rs-proto.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { workspace = true, features = ["js"] }

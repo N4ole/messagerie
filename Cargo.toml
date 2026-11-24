@@ -57,6 +57,8 @@ totp-rs = { version = "5.7", features = ["otpauth"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+# Types WebAuthn : version identique à celle de webauthn-rs (serveur).
+webauthn-rs-proto = "=0.6.2"
 zeroize = { version = "1.8", features = ["derive"] }
 
 [profile.release]

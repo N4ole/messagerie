@@ -284,7 +284,7 @@ impl ApiClient {
 
     // --- WebAuthn -----------------------------------------------------------
 
-    pub async fn webauthn_login_challenge(&self, username: &str, password: &str) -> Result<WebauthnChallenge> {
+    pub async fn webauthn_login_challenge(&self, username: &str, password: &str) -> Result<WebauthnLoginChallenge> {
         self.public(
             Method::POST,
             "/v1/auth/webauthn/challenge",
@@ -293,7 +293,7 @@ impl ApiClient {
         .await
     }
 
-    pub async fn webauthn_register_start(&self) -> Result<WebauthnChallenge> {
+    pub async fn webauthn_register_start(&self) -> Result<WebauthnRegisterChallenge> {
         self.call::<(), _>(Method::POST, "/v1/webauthn/register/start", None).await
     }
 

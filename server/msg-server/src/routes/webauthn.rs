@@ -5,11 +5,11 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use msg_proto::{
-    AccountStatus, ErrorCode, WebauthnChallenge, WebauthnChallengeRequest, WebauthnCredentialSummary,
-    WebauthnRegisterFinish,
+    AccountStatus, ErrorCode, WebauthnChallengeRequest, WebauthnCredentialSummary, WebauthnLoginChallenge,
+    WebauthnRegisterChallenge, WebauthnRegisterFinish,
 };
 use uuid::Uuid;
-use webauthn_rs::prelude::{Passkey, PasskeyRegistration, RegisterPublicKeyCredential};
+use webauthn_rs::prelude::{Passkey, PasskeyRegistration};
 use webauthn_rs::Webauthn;
 
 use crate::auth::AuthContext;
@@ -56,7 +56,7 @@ async fn store_challenge(st: &AppState, account_id: i64, kind: &str, state: Stri
 pub async fn register_start(
     State(st): State<AppState>,
     Extension(ctx): Extension<AuthContext>,
-) -> AppResult<Json<WebauthnChallenge>> {
+) -> AppResult<Json<WebauthnRegisterChallenge>> {
     let wa = wa(&st)?;
     let existing = passkeys(&st, ctx.account_id).await?;
     if existing.len() as i64 >= MAX_CREDENTIALS {
@@ -74,7 +74,7 @@ pub async fn register_start(
     let (options, state) =
         wa.start_passkey_registration(user_id, &ctx.username, &ctx.username, Some(exclude)).map_err(json_err)?;
     let id = store_challenge(&st, ctx.account_id, "register", serde_json::to_string(&state).map_err(json_err)?).await?;
-    Ok(Json(WebauthnChallenge { challenge_id: id, options: serde_json::to_value(options).map_err(json_err)? }))
+    Ok(Json(WebauthnRegisterChallenge { challenge_id: id, options }))
 }
 
 pub async fn register_finish(
@@ -98,10 +98,8 @@ pub async fn register_finish(
     .await?;
     let (state,) = row.ok_or_else(|| AppError::bad_request("défi inconnu ou expiré"))?;
     let state: PasskeyRegistration = serde_json::from_str(&state).map_err(json_err)?;
-    let cred: RegisterPublicKeyCredential = serde_json::from_value(req.credential)
-        .map_err(|_| AppError::bad_request("réponse d'authentificateur invalide"))?;
     let passkey = wa
-        .finish_passkey_registration(&cred, &state)
+        .finish_passkey_registration(&req.credential, &state)
         .map_err(|e| AppError::bad_request(format!("enregistrement refusé : {e}")))?;
     let now = crate::now();
     let cred_id: &[u8] = passkey.cred_id().as_ref();
@@ -166,7 +164,7 @@ pub async fn delete(
 pub async fn login_challenge(
     State(st): State<AppState>,
     Json(req): Json<WebauthnChallengeRequest>,
-) -> AppResult<Json<WebauthnChallenge>> {
+) -> AppResult<Json<WebauthnLoginChallenge>> {
     let wa = wa(&st)?;
     let mut tx = st.db().begin().await?;
     let res = check_credentials(
@@ -192,5 +190,5 @@ pub async fn login_challenge(
     }
     let (options, state) = wa.start_passkey_authentication(&creds).map_err(json_err)?;
     let id = store_challenge(&st, acc.id, "authenticate", serde_json::to_string(&state).map_err(json_err)?).await?;
-    Ok(Json(WebauthnChallenge { challenge_id: id, options: serde_json::to_value(options).map_err(json_err)? }))
+    Ok(Json(WebauthnLoginChallenge { challenge_id: id, options }))
 }

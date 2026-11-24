@@ -10,7 +10,7 @@ use msg_proto::{
 };
 use sqlx::{Postgres, Transaction};
 use subtle::ConstantTimeEq;
-use webauthn_rs::prelude::{Passkey, PasskeyAuthentication, PublicKeyCredential};
+use webauthn_rs::prelude::{Passkey, PasskeyAuthentication};
 
 use crate::auth::{AuthContext, SignedDevice};
 use crate::error::{AppError, AppResult};
@@ -148,8 +148,7 @@ async fn verify_webauthn(
     .await?;
     let Some((state,)) = row else { return Ok(false) };
     let Ok(state) = serde_json::from_str::<PasskeyAuthentication>(&state) else { return Ok(false) };
-    let Ok(cred) = serde_json::from_value::<PublicKeyCredential>(a.credential.clone()) else { return Ok(false) };
-    let Ok(result) = wa.finish_passkey_authentication(&cred, &state) else { return Ok(false) };
+    let Ok(result) = wa.finish_passkey_authentication(&a.credential, &state) else { return Ok(false) };
     let cred_id: &[u8] = result.cred_id().as_ref();
     let stored: Option<(i64, String)> = sqlx::query_as(
         "SELECT id, passkey FROM webauthn_credentials WHERE account_id = $1 AND credential_id = $2 FOR UPDATE",

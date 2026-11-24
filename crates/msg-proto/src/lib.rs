@@ -10,6 +10,9 @@ use uuid::Uuid;
 
 pub mod b64;
 
+/// Types WebAuthn standards (W3C), partagés par le serveur et les clients.
+pub use webauthn_rs_proto as webauthn;
+
 /// Version du protocole applicatif (préfixe des routes).
 pub const API_PREFIX: &str = "/v1";
 
@@ -262,8 +265,7 @@ pub struct LoginRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WebauthnAssertion {
     pub challenge_id: Uuid,
-    /// `PublicKeyCredential` au format JSON WebAuthn (Base64URL).
-    pub credential: serde_json::Value,
+    pub credential: webauthn::PublicKeyCredential,
 }
 
 /// Demande de défi de connexion : le mot de passe est vérifié d'abord.
@@ -273,12 +275,18 @@ pub struct WebauthnChallengeRequest {
     pub password: String,
 }
 
-/// Défi WebAuthn (création ou authentification).
+/// Défi d'enregistrement d'une nouvelle clé.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WebauthnChallenge {
+pub struct WebauthnRegisterChallenge {
     pub challenge_id: Uuid,
-    /// `CreationChallengeResponse` ou `RequestChallengeResponse` (JSON WebAuthn).
-    pub options: serde_json::Value,
+    pub options: webauthn::CreationChallengeResponse,
+}
+
+/// Défi de connexion.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnLoginChallenge {
+    pub challenge_id: Uuid,
+    pub options: webauthn::RequestChallengeResponse,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -286,8 +294,7 @@ pub struct WebauthnRegisterFinish {
     pub challenge_id: Uuid,
     /// Nom choisi par l'utilisateur (« YubiKey bureau »…).
     pub name: String,
-    /// `RegisterPublicKeyCredential` au format JSON WebAuthn.
-    pub credential: serde_json::Value,
+    pub credential: webauthn::RegisterPublicKeyCredential,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
