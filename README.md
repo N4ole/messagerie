@@ -2,7 +2,7 @@
 
 Messagerie chiffrée de bout en bout, disponible en **application Windows (`.exe`)** et en **client web** interopérables, avec serveurs fédérés multi-sites.
 
-> **État : Phase 1 — MVP livré** (serveur, application Windows, messagerie 1-à-1 chiffrée de bout en bout). Voir le [rapport de Phase 1](docs/phases/phase-1.md) et ses **limites connues**. Aucun audit externe : ne pas utiliser pour des usages à haut risque.
+> **État : Phase 2 — Sécurité avancée livrée** (groupes, pièces jointes nettoyées, vérification par QR code, éphémères, anti-capture, verrouillage automatique, YubiKey/passkeys, TPM). Voir les rapports de [Phase 1](docs/phases/phase-1.md) et de [Phase 2](docs/phases/phase-2.md) et leurs **limites connues**. Aucun audit externe : ne pas utiliser pour des usages à haut risque.
 
 ## Démarrage rapide
 

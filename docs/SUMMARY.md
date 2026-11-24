@@ -16,6 +16,7 @@
 # Livraisons
 
 - [Phase 1 — MVP](phases/phase-1.md)
+- [Phase 2 — Sécurité avancée](phases/phase-2.md)
 
 # Guides
 

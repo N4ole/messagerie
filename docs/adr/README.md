@@ -15,3 +15,4 @@ Format : contexte → décision → conséquences. Les ADR 0001-0009 ont été a
 | [0009](0009-federation.md) | Fédération mTLS sur liste blanche, store-and-forward | Acceptée |
 | [0010](0010-api-json.md) | API en JSON versionné plutôt qu'en Protobuf | Acceptée (Phase 1) |
 | [0011](0011-fournisseur-crypto-rustcrypto.md) | Fournisseur RustCrypto et suite ML-KEM-768 + X25519 | Acceptée (Phase 1) |
+| [0012](0012-committer-unique.md) | Un seul membre émet les commits MLS d'un groupe | Acceptée (Phase 2) |

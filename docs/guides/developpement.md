@@ -81,6 +81,10 @@ et l'exécutable portable `target/release/messagerie.exe`.
 | `MSG_MAX_FAILED_LOGINS` / `MSG_LOCKOUT_SECS` | `5` / `900` | Verrouillage |
 | `MSG_ARGON2_M_KIB` / `_T` / `_P` | `65536` / `3` / `1` | Coût Argon2id |
 | `MSG_SEND_RATE_PER_10S` | `50` | Envois par appareil et par 10 s |
+| `MSG_ATTACHMENT_RETENTION_SECS` | `2592000` | Conservation d'une pièce jointe chiffrée |
+| `MSG_ATTACHMENT_QUOTA_BYTES` | `1073741824` | Volume de pièces jointes par appareil |
+| `MSG_WEBAUTHN_RP_ID` | — | Domaine WebAuthn (ex. `messagerie.exemple.org`) ; active les passkeys |
+| `MSG_WEBAUTHN_ORIGIN` | — | Origine publique exacte (ex. `https://messagerie.exemple.org`) |
 | `MSG_LOG` / `MSG_LOG_JSON` | `info` / `0` | Journalisation |
 
 > Perdre `MSG_SERVER_SECRET` rend tous les mots de passe et secrets TOTP
