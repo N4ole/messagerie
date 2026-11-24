@@ -124,5 +124,5 @@ Légende statut : ✅ traité · ⚠️ partiellement (limite documentée) · �
 1. **Client web** : la confiance dans le serveur qui livre le code est inévitable.
 2. **Métadonnées de routage** visibles par le serveur de chaque site.
 3. **Poste compromis** pendant l'usage = messages compromis (vrai pour toute messagerie).
-4. **Implémentations non auditées** : OpenMLS et la suite X-Wing n'ont pas (à notre connaissance) d'audit public complet ; à re-vérifier avant production.
+4. **Implémentations non auditées** : OpenMLS et les suites MLS post-quantiques n'ont pas (à notre connaissance) d'audit public complet ; à re-vérifier avant production.
 5. **Administrateur** : peut nier le service (suspension) ou réinitialiser un compte (visible par tous les contacts) mais ne peut pas lire.

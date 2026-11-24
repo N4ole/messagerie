@@ -1,0 +1,32 @@
+[package]
+name = "msg-crypto"
+description = "Façade cryptographique : identités, certificats d'appareil, MLS (OpenMLS), signature des requêtes, enveloppe de clés."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+argon2.workspace = true
+base64.workspace = true
+chacha20poly1305.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+openmls.workspace = true
+openmls_basic_credential.workspace = true
+openmls_memory_storage.workspace = true
+openmls_rust_crypto.workspace = true
+openmls_traits.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+openmls = { workspace = true, features = ["js"] }
+getrandom = { workspace = true, features = ["wasm_js"] }
+# Version 0.2 tirée transitivement (rand_core 0.6) : backend navigateur.
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }

@@ -1,0 +1,100 @@
+name: Release
+
+# Déclenché par un tag de version (ex. v0.1.0).
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  windows:
+    name: Construction Windows
+    runs-on: windows-2022
+    # L'environnement « release-signing » porte les secrets de signature
+    # (Phase 5) et peut exiger une approbation manuelle.
+    environment: release-signing
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Cohérence tag / versions
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          $conf = (Get-Content apps/desktop/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ($tag -ne $conf -or $tag -ne $cargo) { throw "Tag $tag ≠ tauri.conf.json $conf / Cargo.toml $cargo" }
+          "version=$tag" >> $env:GITHUB_OUTPUT
+      - name: Chaîne Rust
+        run: rustup toolchain install && rustup show
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:ui
+      - run: cargo test --workspace --exclude msg-server --locked
+      - run: pnpm tauri build
+      - name: Regroupement
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/bundle/msi/*.msi "dist/Messagerie_${v}_x64_fr-FR.msi"
+          Copy-Item target/release/bundle/nsis/*-setup.exe "dist/Messagerie_${v}_x64-setup.exe"
+          Copy-Item target/release/messagerie.exe "dist/Messagerie_${v}_x64_portable.exe"
+      # Signature Authenticode : ajoutée en Phase 5 (certificat à fournir).
+      # Tant qu'elle est absente, les binaires sont publiés NON SIGNÉS.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows
+          path: dist/
+
+  publish:
+    name: Publication
+    needs: windows
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows
+          path: dist
+      - name: Sommes de contrôle SHA-256
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Attestation de provenance (SLSA, Sigstore)
+        # Disponible pour les dépôts publics (ou GitHub Enterprise Cloud).
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: dist/*
+      - name: Notes de version
+        run: |
+          cat > notes.md <<'NOTES'
+          ## Vérification
+
+          ```bash
+          sha256sum -c SHA256SUMS
+          gh attestation verify Messagerie_*_x64-setup.exe --repo ${{ github.repository }}
+          ```
+
+          > **Binaires non signés (Authenticode)** : Windows SmartScreen affichera un avertissement.
+          > La signature de code sera activée en Phase 5 (voir `docs/guides/github-setup.md`).
+          NOTES
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: dist/*
+          body_path: notes.md
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

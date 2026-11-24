@@ -1,0 +1,14 @@
+[package]
+name = "msg-platform-win"
+description = "Intégrations Windows (DPAPI ; TPM, anti-capture et WebAuthn natif en Phase 2). Seul crate autorisé à contenir du code `unsafe` (FFI)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

@@ -33,7 +33,7 @@ Légende : ✅ réalisable intégralement · ⚠️ partiellement / avec conditi
 
 | Exigence | Statut | Remarque |
 |---|---|---|
-| E2EE avancé, hybride post-quantique | ⚠️ | Confidentialité hybride X-Wing ✅ ; **authentification (Ed25519) non post-quantique** ; suite au point de code provisoire |
+| E2EE avancé, hybride post-quantique | ⚠️ | Confidentialité hybride ML-KEM-768 + X25519 ✅ ; **authentification (Ed25519) non post-quantique** ; suite au point de code provisoire |
 | Rotation automatique | ✅ | |
 | Vérification QR | ✅ | |
 | Détection de changements de clés | ✅ | |

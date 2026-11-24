@@ -1,0 +1,30 @@
+[package]
+name = "messagerie-desktop"
+description = "Application de bureau (Tauri v2). Les clés restent dans ce processus Rust ; la WebView n'en voit aucune."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "messagerie_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "messagerie"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+msg-client-core.workspace = true
+base64.workspace = true
+futures-util.workspace = true
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

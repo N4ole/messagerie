@@ -1,0 +1,15 @@
+# Image du serveur : compilation multi-étapes, exécution sur une base
+# distroless sans shell, en utilisateur non privilégié.
+FROM rust:1.97-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked -p msg-server \
+ && cp target/release/msg-server /msg-server
+
+FROM gcr.io/distroless/cc-debian12:nonroot
+COPY --from=build /msg-server /usr/local/bin/msg-server
+USER nonroot:nonroot
+EXPOSE 8080
+ENV MSG_BIND=0.0.0.0:8080 MSG_LOG_JSON=1
+ENTRYPOINT ["/usr/local/bin/msg-server"]
+CMD ["serve"]

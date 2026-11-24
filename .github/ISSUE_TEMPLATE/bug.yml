@@ -1,0 +1,25 @@
+name: Bogue
+description: Comportement incorrect (hors vulnérabilité de sécurité)
+labels: [bogue]
+body:
+  - type: markdown
+    attributes:
+      value: "⚠️ Ne joignez **aucun** message, clé, journal contenant des données personnelles ou code d'activation."
+  - type: input
+    id: version
+    attributes: { label: Version, placeholder: "v0.1.0" }
+    validations: { required: true }
+  - type: dropdown
+    id: composant
+    attributes:
+      label: Composant
+      options: [Application Windows, Client web, Serveur, Administration, Documentation]
+    validations: { required: true }
+  - type: textarea
+    id: etapes
+    attributes: { label: Étapes pour reproduire }
+    validations: { required: true }
+  - type: textarea
+    id: attendu
+    attributes: { label: Résultat attendu / obtenu }
+    validations: { required: true }
