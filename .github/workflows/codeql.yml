@@ -33,6 +33,12 @@ jobs:
         with:
           category: /language:${{ matrix.language }}
           output: sarif-results
+      - name: Résumé des alertes (journal)
+        if: always()
+        run: |
+          for f in sarif-results/*.sarif; do
+            jq -r '.runs[].results[] | "\(.ruleId) \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) — \(.message.text | gsub("\n"; " ") | .[0:160])"' "$f"
+          done
       # Rapport SARIF conservé en artefact (lecture hors de l'interface GitHub).
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
