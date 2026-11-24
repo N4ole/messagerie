@@ -20,7 +20,9 @@ msg-admin --server https://messagerie.exemple.org --user admin enroll
 ```
 
 La commande demande le code d'activation, définit le mot de passe, affiche le
-secret TOTP à ajouter dans une application d'authentification, et enregistre
+secret TOTP **sous forme de QR code uniquement** (jamais en texte, pour qu'il ne
+reste pas dans l'historique du terminal), à scanner avec une application
+d'authentification, et enregistre
 un appareil d'administration (clés dans une base locale chiffrée).
 
 > Utilisez un compte dédié à l'administration : le même identifiant ne peut

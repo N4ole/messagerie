@@ -90,9 +90,15 @@ async fn main() -> anyhow::Result<()> {
             bail!("les mots de passe ne correspondent pas");
         }
         let act = Client::activate(&cfg, &cli.user, &code, &pw).await?;
-        println!("Ajoutez ce secret dans votre application d'authentification :");
-        println!("  {}", act.totp_secret_base32);
-        println!("  {}", act.otpauth_uri);
+        // Le secret TOTP n'est jamais écrit en texte (historique du terminal,
+        // enregistrements de session) : il est présenté uniquement en QR code.
+        let qr = qrcode::QrCode::new(act.otpauth_uri.as_bytes())?
+            .render::<qrcode::render::unicode::Dense1x2>()
+            .quiet_zone(true)
+            .build();
+        eprintln!("Scannez ce QR code avec votre application d'authentification :\n");
+        eprintln!("{qr}");
+        drop(act);
         let totp = prompt("Code TOTP affiché par l'application : ")?;
         let c = Client::enroll(&cfg, &cli.user, &pw, &totp).await?;
         println!("Appareil enregistré. Empreinte d'identité : {}", c.identity_fingerprint());

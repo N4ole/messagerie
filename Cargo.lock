@@ -3334,6 +3334,7 @@ dependencies = [
  "dirs 6.0.0",
  "msg-client-core",
  "msg-proto",
+ "qrcode",
  "rpassword",
  "tokio",
  "uuid",
