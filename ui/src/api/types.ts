@@ -4,14 +4,29 @@ export interface Session {
   username: string;
   deviceId: string;
   fingerprint: string;
+  /** Protection du coffre local : `tpm+dpapi`, `dpapi`, `none`… */
+  vaultProtection: string;
+  /** Protection contre la capture d'écran appliquée à la fenêtre. */
+  captureProtection: string;
 }
+
+export type ConversationStatus = "ok" | "identity_changed" | "removed" | "left";
 
 export interface Conversation {
   id: string;
+  kind: "direct" | "group";
+  title: string;
   peer: string;
+  members: string[];
+  admin: string | null;
+  is_admin: boolean;
+  status: ConversationStatus;
+  identity_changed: string[];
   last_activity_ms: number;
   unread: number;
+  verified: boolean;
   peer_fingerprint: string;
+  ttl_s: number | null;
 }
 
 /** Nœuds de l'AST Markdown sûr produit par `msg-markdown`. */
@@ -33,6 +48,15 @@ export type MdNode =
   | { t: "hard_break" }
   | { t: "rule" };
 
+export interface Attachment {
+  name: string;
+  mime: string;
+  size: number;
+  metadata_cleaned: boolean;
+  /** Miniature générée localement (data URI), jamais distante. */
+  thumbnail_data_uri: string | null;
+}
+
 export interface Message {
   id: string;
   conversation_id: string;
@@ -40,8 +64,11 @@ export interface Message {
   outgoing: boolean;
   sent_at_ms: number;
   received_at_ms: number;
+  kind: "text" | "attachment";
   text: string;
   ast: MdNode[];
+  attachment: Attachment | null;
+  expires_at_ms: number | null;
 }
 
 export interface SyncReport {
@@ -49,6 +76,10 @@ export interface SyncReport {
   new_messages: number;
   changed_conversations: string[];
   rejected: number;
+  identity_changes: string[];
+  removed_from: string[];
+  expired: number;
+  rotations: number;
 }
 
 export interface Activation {
@@ -56,6 +87,29 @@ export interface Activation {
   otpauth_uri: string;
   /** QR code SVG généré localement (data URI). */
   qr_data_uri: string;
+}
+
+export interface SafetyNumber {
+  username: string;
+  /** 60 chiffres par groupes de 5. */
+  number: string;
+  qr_payload: string;
+  qr_data_uri: string;
+  verified: boolean;
+  identity_changed: boolean;
+}
+
+export interface Passkey {
+  id: number;
+  name: string;
+  created_at: number;
+  last_used_at: number | null;
+}
+
+export interface SecurityStatus {
+  captureProtection: string;
+  autoLockMinutes: number;
+  passkeysSupported: boolean;
 }
 
 /** Erreur structurée renvoyée par le cœur. */

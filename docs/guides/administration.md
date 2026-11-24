@@ -47,9 +47,31 @@ msg-admin --server URL --user admin revoke alice <device-id>
 
 Toutes les actions sont tracées dans la table `admin_audit` (append-only).
 
+## Passkeys et clés de sécurité (YubiKey)
+
+Activation côté serveur :
+
+```bash
+export MSG_WEBAUTHN_RP_ID=messagerie.exemple.org
+export MSG_WEBAUTHN_ORIGIN=https://messagerie.exemple.org
+```
+
+Le domaine doit être celui de l'URL que les utilisateurs saisissent dans
+l'application (le client refuse tout autre domaine). Chaque utilisateur
+ajoute ensuite ses clés depuis *⚙ Sécurité* ; elles remplacent le code TOTP à
+la connexion (le mot de passe reste exigé). Une réinitialisation de compte
+supprime ses clés.
+
+## Groupes
+
+Le créateur d'un groupe en est l'administrateur : lui seul ajoute ou retire
+des membres (ADR-0012). Le serveur ne connaît ni les groupes, ni leurs noms,
+ni leurs membres : il relaie des messages vers des appareils.
+
 ## Réinitialisation d'un compte
 
 `reset` efface mot de passe, TOTP, clé d'identité et appareils, puis émet un
 nouveau code d'activation. Les correspondants de l'utilisateur **rejetteront**
-sa nouvelle identité (protection contre l'usurpation) ; la gestion de cette
-alerte dans l'interface (vérification par QR code) arrive en Phase 2.
+sa nouvelle identité : leurs conversations sont suspendues (contenu masqué,
+envoi bloqué) jusqu'à vérification du numéro de sécurité (QR code ou
+chiffres) ou acceptation explicite.

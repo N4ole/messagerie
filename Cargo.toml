@@ -6,6 +6,7 @@ members = [
     "crates/msg-markdown",
     "crates/msg-client-core",
     "crates/msg-platform-win",
+    "crates/msg-media",
     "server/msg-server",
     "server/msg-admin",
     "apps/desktop/src-tauri",
@@ -26,6 +27,7 @@ msg-crypto = { path = "crates/msg-crypto" }
 msg-markdown = { path = "crates/msg-markdown" }
 msg-client-core = { path = "crates/msg-client-core" }
 msg-platform-win = { path = "crates/msg-platform-win" }
+msg-media = { path = "crates/msg-media" }
 
 anyhow = "1"
 argon2 = { version = "0.5", features = ["std", "zeroize"] }
@@ -55,6 +57,8 @@ totp-rs = { version = "5.7", features = ["otpauth"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+# Types WebAuthn : version identique à celle de webauthn-rs (serveur).
+webauthn-rs-proto = "=0.6.2"
 zeroize = { version = "1.8", features = ["derive"] }
 
 [profile.release]

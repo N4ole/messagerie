@@ -65,7 +65,7 @@ impl ApiClient {
     pub fn new(base: Url) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent("messagerie")
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(120))
             .redirect(reqwest::redirect::Policy::none())
             .https_only(base.scheme() == "https")
             .build()?;
@@ -110,6 +110,17 @@ impl ApiClient {
     }
 
     fn signed_builder(&self, method: Method, path: &str, body: &[u8], bearer: bool) -> Result<reqwest::RequestBuilder> {
+        self.signed_builder_ct(method, path, body, bearer, "application/json")
+    }
+
+    fn signed_builder_ct(
+        &self,
+        method: Method,
+        path: &str,
+        body: &[u8],
+        bearer: bool,
+        content_type: &str,
+    ) -> Result<reqwest::RequestBuilder> {
         let dev = self.device.as_ref().ok_or(ClientError::NotLoggedIn)?;
         let url = self.url(path)?;
         let pq = match url.query() {
@@ -129,7 +140,7 @@ impl ApiClient {
             rb = rb.bearer_auth(t.access_token);
         }
         if !body.is_empty() {
-            rb = rb.header(reqwest::header::CONTENT_TYPE, "application/json").body(body.to_vec());
+            rb = rb.header(reqwest::header::CONTENT_TYPE, content_type).body(body.to_vec());
         }
         Ok(rb)
     }
@@ -156,6 +167,40 @@ impl ApiClient {
             return decode(self.signed_builder(method, path, &bytes, true)?.send().await?).await;
         }
         decode(resp).await
+    }
+
+    /// Requête authentifiée à corps binaire ; renvoie la réponse brute.
+    async fn call_raw(&self, method: Method, path: &str, body: &[u8], content_type: &str) -> Result<reqwest::Response> {
+        if self.tokens().is_some_and(|t| t.access_expires_at <= crate::now_secs() + 5) {
+            self.refresh().await?;
+        }
+        let resp = self.signed_builder_ct(method.clone(), path, body, true, content_type)?.send().await?;
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            self.refresh().await?;
+            return Ok(self.signed_builder_ct(method, path, body, true, content_type)?.send().await?);
+        }
+        Ok(resp)
+    }
+
+    /// Téléverse une pièce jointe **déjà chiffrée**.
+    pub async fn upload_attachment(&self, blob: &[u8]) -> Result<Uuid> {
+        let resp = self.call_raw(Method::POST, "/v1/attachments", blob, "application/octet-stream").await?;
+        Ok(decode::<AttachmentUploadResponse>(resp).await?.blob_id)
+    }
+
+    /// Télécharge une pièce jointe chiffrée.
+    pub async fn download_attachment(&self, blob_id: Uuid) -> Result<Vec<u8>> {
+        let resp =
+            self.call_raw(Method::GET, &format!("/v1/attachments/{blob_id}"), b"", "application/octet-stream").await?;
+        if !resp.status().is_success() {
+            return decode::<()>(resp).await.map(|_| Vec::new());
+        }
+        let limit = msg_proto::MAX_ATTACHMENT_BLOB_BYTES;
+        let bytes = resp.bytes().await?;
+        if bytes.len() > limit {
+            return Err(ClientError::Invalid("pièce jointe trop volumineuse".into()));
+        }
+        Ok(bytes.to_vec())
     }
 
     /// Renouvelle les jetons à l'aide du jeton de rafraîchissement (rotation).
@@ -235,6 +280,33 @@ impl ApiClient {
 
     pub async fn ack(&self, ids: Vec<i64>) -> Result<()> {
         self.call(Method::POST, "/v1/queue/ack", Some(&AckRequest { ids })).await
+    }
+
+    // --- WebAuthn -----------------------------------------------------------
+
+    pub async fn webauthn_login_challenge(&self, username: &str, password: &str) -> Result<WebauthnLoginChallenge> {
+        self.public(
+            Method::POST,
+            "/v1/auth/webauthn/challenge",
+            Some(&WebauthnChallengeRequest { username: username.into(), password: password.into() }),
+        )
+        .await
+    }
+
+    pub async fn webauthn_register_start(&self) -> Result<WebauthnRegisterChallenge> {
+        self.call::<(), _>(Method::POST, "/v1/webauthn/register/start", None).await
+    }
+
+    pub async fn webauthn_register_finish(&self, req: &WebauthnRegisterFinish) -> Result<WebauthnCredentialSummary> {
+        self.call(Method::POST, "/v1/webauthn/register/finish", Some(req)).await
+    }
+
+    pub async fn webauthn_list(&self) -> Result<Vec<WebauthnCredentialSummary>> {
+        self.call::<(), _>(Method::GET, "/v1/webauthn/credentials", None).await
+    }
+
+    pub async fn webauthn_delete(&self, id: i64) -> Result<()> {
+        self.call::<(), ()>(Method::DELETE, &format!("/v1/webauthn/credentials/{id}"), None).await
     }
 
     // --- Administration ---------------------------------------------------

@@ -3,7 +3,8 @@
 //! La base SQLCipher est chiffrée par une clé aléatoire de 256 bits. Cette
 //! clé est enveloppée par une clé dérivée du mot de passe (Argon2id, sel local
 //! jamais transmis), puis — sous Windows — protégée par DPAPI (liée à la
-//! session Windows). Le TPM s'ajoutera en Phase 2 (ADR-0005).
+//! session Windows) et, si un TPM 2.0 est présent, scellée par une clé
+//! non exportable du TPM (ADR-0005) : protection `tpm+dpapi`.
 
 use std::path::{Path, PathBuf};
 
@@ -14,6 +15,14 @@ use zeroize::Zeroizing;
 use crate::error::{ClientError, Result};
 
 const DPAPI_ENTROPY: &[u8] = b"messagerie/vault/v1";
+const TPM_AAD: &[u8] = b"messagerie/vault/tpm/v1";
+
+/// Couche TPM : clé de 256 bits scellée par le TPM, qui chiffre l'enveloppe.
+#[derive(Serialize, Deserialize)]
+struct TpmLayer {
+    tpm_sealed_key: String,
+    data: String,
+}
 
 #[derive(Serialize, Deserialize)]
 struct VaultFile {
@@ -45,22 +54,63 @@ impl AccountPaths {
     }
 }
 
-/// Crée un coffre pour une nouvelle clé de base et la retourne.
-pub fn create(paths: &AccountPaths, password: &str, params: Argon2Params) -> Result<Zeroizing<[u8; 32]>> {
-    std::fs::create_dir_all(&paths.dir).map_err(|e| ClientError::Storage(e.to_string()))?;
-    let key = msg_crypto::random_secret::<32>()?;
-    let wrapped = keywrap::wrap(&key, password, params)?;
-    let json = Zeroizing::new(serde_json::to_vec(&wrapped).map_err(|e| ClientError::Storage(e.to_string()))?);
-    let (protection, blob) = if msg_platform_win::dpapi_available() {
-        let p =
-            msg_platform_win::dpapi_protect(&json, DPAPI_ENTROPY).map_err(|e| ClientError::Storage(e.to_string()))?;
-        ("dpapi", hex::encode(p))
+fn storage<E: std::fmt::Display>(e: E) -> ClientError {
+    ClientError::Storage(e.to_string())
+}
+
+impl AccountPaths {
+    /// Nom de la clé TPM propre à ce compte local.
+    fn tpm_key_name(&self) -> String {
+        format!("Messagerie-{}", self.dir.file_name().map(|n| n.to_string_lossy()).unwrap_or_default())
+    }
+}
+
+/// Écrit le coffre protégeant `key` avec la meilleure protection disponible.
+fn write_vault(paths: &AccountPaths, key: &[u8; 32], password: &str, params: Argon2Params) -> Result<&'static str> {
+    let wrapped = keywrap::wrap(key, password, params)?;
+    let mut json = Zeroizing::new(serde_json::to_vec(&wrapped).map_err(storage)?);
+    let mut protection = "none";
+    if msg_platform_win::tpm::available() {
+        let k_tpm = msg_crypto::random_secret::<32>()?;
+        let data = keywrap::seal(&k_tpm, &json, TPM_AAD)?;
+        let sealed = msg_platform_win::tpm::seal(&paths.tpm_key_name(), k_tpm.as_ref()).map_err(storage)?;
+        let layer = TpmLayer { tpm_sealed_key: hex::encode(sealed), data: hex::encode(data) };
+        json = Zeroizing::new(serde_json::to_vec(&layer).map_err(storage)?);
+        protection = "tpm";
+    }
+    let blob = if msg_platform_win::dpapi_available() {
+        protection = if protection == "tpm" { "tpm+dpapi" } else { "dpapi" };
+        hex::encode(msg_platform_win::dpapi_protect(&json, DPAPI_ENTROPY).map_err(storage)?)
     } else {
-        ("none", hex::encode(&json[..]))
+        hex::encode(&json[..])
     };
     let file = VaultFile { version: 1, protection: protection.into(), blob };
-    write_private(&paths.vault, &serde_json::to_vec_pretty(&file).map_err(|e| ClientError::Storage(e.to_string()))?)?;
+    write_private(&paths.vault, &serde_json::to_vec_pretty(&file).map_err(storage)?)?;
+    Ok(protection)
+}
+
+/// Crée un coffre pour une nouvelle clé de base et la retourne.
+pub fn create(paths: &AccountPaths, password: &str, params: Argon2Params) -> Result<Zeroizing<[u8; 32]>> {
+    std::fs::create_dir_all(&paths.dir).map_err(storage)?;
+    let key = msg_crypto::random_secret::<32>()?;
+    write_vault(paths, &key, password, params)?;
     Ok(key)
+}
+
+/// Protection actuelle du coffre (`none`, `dpapi`, `tpm`, `tpm+dpapi`).
+pub fn protection(paths: &AccountPaths) -> Result<String> {
+    let raw = std::fs::read(&paths.vault).map_err(|_| ClientError::NoLocalAccount)?;
+    Ok(serde_json::from_slice::<VaultFile>(&raw).map_err(storage)?.protection)
+}
+
+/// Renforce un coffre existant si un TPM est devenu disponible (coffres
+/// créés en Phase 1 ou sur une machine sans TPM).
+pub fn harden(paths: &AccountPaths, key: &[u8; 32], password: &str, params: Argon2Params) -> Result<String> {
+    let current = protection(paths)?;
+    if current.starts_with("tpm") || !msg_platform_win::tpm::available() {
+        return Ok(current);
+    }
+    Ok(write_vault(paths, key, password, params)?.to_string())
 }
 
 /// Ouvre le coffre avec le mot de passe.
@@ -71,12 +121,28 @@ pub fn open(paths: &AccountPaths, password: &str) -> Result<Zeroizing<[u8; 32]>>
         return Err(ClientError::Storage("version de coffre inconnue".into()));
     }
     let blob = Zeroizing::new(hex::decode(&file.blob).map_err(|e| ClientError::Storage(e.to_string()))?);
-    let json = match file.protection.as_str() {
-        "dpapi" => msg_platform_win::dpapi_unprotect(&blob, DPAPI_ENTROPY)
-            .map_err(|e| ClientError::Storage(format!("DPAPI : {e}")))?,
-        "none" => blob,
+    let (tpm, dpapi) = match file.protection.as_str() {
+        "none" => (false, false),
+        "dpapi" => (false, true),
+        "tpm" => (true, false),
+        "tpm+dpapi" => (true, true),
         _ => return Err(ClientError::Storage("protection de coffre inconnue".into())),
     };
+    let mut json = if dpapi {
+        msg_platform_win::dpapi_unprotect(&blob, DPAPI_ENTROPY)
+            .map_err(|e| ClientError::Storage(format!("DPAPI : {e}")))?
+    } else {
+        blob
+    };
+    if tpm {
+        let layer: TpmLayer = serde_json::from_slice(&json).map_err(storage)?;
+        let sealed = hex::decode(&layer.tpm_sealed_key).map_err(storage)?;
+        let k = msg_platform_win::tpm::unseal(&paths.tpm_key_name(), &sealed)
+            .map_err(|e| ClientError::Storage(format!("TPM : {e}")))?;
+        let k: [u8; 32] = k.as_slice().try_into().map_err(|_| ClientError::Storage("clé TPM invalide".into()))?;
+        let k = Zeroizing::new(k);
+        json = keywrap::open(&k, &hex::decode(&layer.data).map_err(storage)?, TPM_AAD)?;
+    }
     let wrapped: WrappedKey = serde_json::from_slice(&json).map_err(|e| ClientError::Storage(e.to_string()))?;
     keywrap::unwrap(&wrapped, password).map_err(|_| ClientError::WrongPassword)
 }

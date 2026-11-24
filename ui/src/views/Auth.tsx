@@ -21,7 +21,7 @@ function saveServer(s: string) {
   }
 }
 
-export function Auth({ onSession }: { onSession: (s: Session) => void }) {
+export function Auth({ onSession, notice = null }: { onSession: (s: Session) => void; notice?: string | null }) {
   const [mode, setMode] = useState<"login" | "activate">("login");
   const [server, setServer] = useState(loadServer);
   return (
@@ -31,6 +31,11 @@ export function Auth({ onSession }: { onSession: (s: Session) => void }) {
           <h1>Messagerie</h1>
           <ThemeToggle />
         </header>
+        {notice && (
+          <p role="status" className="hint">
+            {notice}
+          </p>
+        )}
         <label>
           Serveur
           <input
@@ -68,6 +73,24 @@ function LoginForm({ server, onSession }: { server: string; onSession: (s: Sessi
   const [needTotp, setNeedTotp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  async function withPasskey() {
+    if (!username.trim() || !password) {
+      setError("Saisissez votre identifiant et votre mot de passe, puis utilisez votre clé de sécurité.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const s = await backend.loginPasskey(server, username.trim(), password);
+      setPassword("");
+      onSession(s);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -123,6 +146,9 @@ function LoginForm({ server, onSession }: { server: string; onSession: (s: Sessi
       )}
       <button type="submit" disabled={busy}>
         {busy ? "Connexion…" : "Se connecter"}
+      </button>
+      <button type="button" className="ghost" disabled={busy} onClick={() => void withPasskey()}>
+        🔑 Se connecter avec une clé de sécurité
       </button>
     </form>
   );

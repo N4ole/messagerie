@@ -21,3 +21,19 @@ même poste) et deux comptes créés par `msg-admin`.
 | 10 | Thème clair / sombre / système | ☐ | ☐ |
 | 11 | Navigation complète au clavier, lecteur d'écran (Narrateur) | ☐ | ☐ |
 | 12 | Aucune connexion réseau autre que le serveur configuré (Moniteur de ressources ou Wireshark) | ☐ | ☐ |
+
+## Phase 2
+
+| # | Vérification | Windows 10 | Windows 11 |
+|---|---|---|---|
+| 13 | ⚙ Sécurité affiche « fenêtre exclue des captures » ; une capture (Win+Maj+S, OBS, Teams) montre une fenêtre vide | ☐ | ☐ |
+| 14 | Poste avec TPM 2.0 : ⚙ Sécurité affiche « TPM + DPAPI » ; `vault.json` contient `"protection": "tpm+dpapi"` | ☐ | ☐ |
+| 15 | Base de Phase 1 existante : après connexion, le coffre passe en `tpm+dpapi` et l'historique est conservé | ☐ | ☐ |
+| 16 | YubiKey : ajout d'une clé (PIN + contact), connexion « avec une clé de sécurité » sans TOTP | ☐ | ☐ |
+| 17 | Windows Hello comme passkey (si disponible) | ☐ | ☐ |
+| 18 | Verrouillage automatique au bout du délai choisi ; déverrouillage par mot de passe seul | ☐ | ☐ |
+| 19 | Notification « Nouveau message » sans nom ni contenu quand la fenêtre est en arrière-plan | ☐ | ☐ |
+| 20 | Photo d'un smartphone avec position GPS : après envoi, le fichier enregistré par le destinataire n'a plus d'EXIF (Propriétés → Détails) | ☐ | ☐ |
+| 21 | Groupe à 3 : ajout, retrait (le membre retiré ne reçoit plus rien), départ | ☐ | ☐ |
+| 22 | Vérification par QR code entre deux postes équipés de webcam | ☐ | ☐ |
+| 23 | Message éphémère de 30 s : disparaît chez les deux correspondants | ☐ | ☐ |

@@ -22,6 +22,19 @@ pub struct Config {
     pub argon2_p: u32,
     /// Envois autorisés par appareil et par fenêtre de 10 s.
     pub send_rate_per_10s: u32,
+    /// Conservation maximale d'une pièce jointe chiffrée.
+    pub attachment_retention_secs: i64,
+    /// Volume total de pièces jointes par appareil.
+    pub attachment_quota_bytes: i64,
+    /// WebAuthn : identifiant de la partie de confiance (domaine) et origine
+    /// publique du serveur. Désactivé si absent.
+    pub webauthn: Option<WebauthnConfig>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WebauthnConfig {
+    pub rp_id: String,
+    pub origin: String,
 }
 
 impl std::fmt::Debug for Config {
@@ -53,6 +66,9 @@ impl Config {
             argon2_t: 3,
             argon2_p: 1,
             send_rate_per_10s: 50,
+            attachment_retention_secs: 30 * 24 * 3600,
+            attachment_quota_bytes: 1024 * 1024 * 1024,
+            webauthn: None,
         }
     }
 
@@ -79,6 +95,13 @@ impl Config {
         c.argon2_t = env_i64("MSG_ARGON2_T", c.argon2_t as i64)? as u32;
         c.argon2_p = env_i64("MSG_ARGON2_P", c.argon2_p as i64)? as u32;
         c.send_rate_per_10s = env_i64("MSG_SEND_RATE_PER_10S", c.send_rate_per_10s as i64)? as u32;
+        c.attachment_retention_secs = env_i64("MSG_ATTACHMENT_RETENTION_SECS", c.attachment_retention_secs)?;
+        c.attachment_quota_bytes = env_i64("MSG_ATTACHMENT_QUOTA_BYTES", c.attachment_quota_bytes)?;
+        c.webauthn = match (std::env::var("MSG_WEBAUTHN_RP_ID"), std::env::var("MSG_WEBAUTHN_ORIGIN")) {
+            (Ok(rp_id), Ok(origin)) => Some(WebauthnConfig { rp_id, origin }),
+            (Err(_), Err(_)) => None,
+            _ => bail!("MSG_WEBAUTHN_RP_ID et MSG_WEBAUTHN_ORIGIN doivent être définis ensemble"),
+        };
         if c.access_ttl_secs <= 0 || c.session_ttl_secs < c.access_ttl_secs {
             bail!("durées de session incohérentes");
         }

@@ -1,20 +1,42 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions minimales de la fenêtre principale : commandes de messagerie et réception d'événements. Aucun accès fichier, shell, réseau ou presse-papiers depuis la WebView.",
-  "windows": ["main"],
+  "description": "Permissions minimales de la fenêtre principale : commandes de messagerie et réception d'événements. Aucun accès direct au système de fichiers, au shell, au réseau ou au presse-papiers depuis la WebView (la boîte de dialogue d'enregistrement est ouverte côté Rust).",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-activate",
     "allow-enroll",
     "allow-login",
+    "allow-login-passkey",
+    "allow-lock",
     "allow-logout",
+    "allow-activity",
+    "allow-set-auto-lock",
+    "allow-security-status",
     "allow-conversations",
+    "allow-conversation",
     "allow-messages",
     "allow-start-conversation",
+    "allow-create-group",
+    "allow-add-member",
+    "allow-remove-member",
+    "allow-leave-group",
+    "allow-set-ephemeral",
     "allow-send-message",
+    "allow-send-file",
+    "allow-image-bytes",
+    "allow-save-attachment",
     "allow-mark-read",
-    "allow-sync"
+    "allow-sync",
+    "allow-safety-number",
+    "allow-verify-safety-number",
+    "allow-accept-identity-change",
+    "allow-register-passkey",
+    "allow-list-passkeys",
+    "allow-delete-passkey"
   ]
 }

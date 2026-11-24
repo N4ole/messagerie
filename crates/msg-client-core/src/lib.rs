@@ -7,12 +7,17 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod attachments;
 pub mod client;
+pub mod conversations;
 pub mod error;
+pub mod passkey;
 pub mod store;
 pub mod vault;
 
-pub use client::{Client, ClientConfig, ConversationView, MessageView, SyncReport};
+pub use attachments::DownloadedFile;
+pub use client::{Client, ClientConfig};
+pub use conversations::{AttachmentView, ConversationView, MessageView, SafetyNumberView, SyncReport};
 pub use error::{ClientError, Result};
 
 pub(crate) fn now_secs() -> i64 {

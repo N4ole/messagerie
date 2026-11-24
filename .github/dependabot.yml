@@ -1,20 +1,33 @@
+# Une seule PR groupée par écosystème et par mois (mineures ET majeures),
+# 5 PR ouvertes au maximum. Les alertes de sécurité Dependabot restent
+# indépendantes de ce calendrier (paramètres du dépôt).
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
-    schedule: { interval: weekly }
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 5
     groups:
-      rust-minor:
-        update-types: [minor, patch]
+      rust:
+        patterns: ["*"]
   - package-ecosystem: npm
     directory: /
-    schedule: { interval: weekly }
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 5
     groups:
-      npm-minor:
-        update-types: [minor, patch]
+      npm:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
-    schedule: { interval: weekly }
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: /deploy/docker
-    schedule: { interval: weekly }
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 5
+    groups:
+      docker:
+        patterns: ["*"]

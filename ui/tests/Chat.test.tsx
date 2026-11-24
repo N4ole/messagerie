@@ -3,9 +3,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BackendContext } from "../src/api/context";
 import { Chat } from "../src/views/Chat";
-import { mockBackend } from "./mockBackend";
+import { mockBackend, report, session } from "./mockBackend";
 
-const session = { username: "alice", deviceId: "d", fingerprint: "FP" };
 
 describe("Conversation", () => {
   it("ouvre une conversation et envoie un message avec Entrée", async () => {
@@ -45,7 +44,7 @@ describe("Conversation", () => {
       </BackendContext.Provider>,
     );
     await waitFor(() => expect(b.onUpdate).toHaveBeenCalled());
-    await act(async () => b.emit({ processed: 1, new_messages: 0, changed_conversations: [], rejected: 1 }));
+    await act(async () => b.emit(report({ processed: 1, rejected: 1 })));
     expect(await screen.findByRole("alert")).toHaveTextContent("rejeté");
   });
 
@@ -59,7 +58,8 @@ describe("Conversation", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Verrouiller" }));
     await waitFor(() => expect(onLogout).toHaveBeenCalled());
-    expect(b.logout).toHaveBeenCalled();
+    expect(b.lock).toHaveBeenCalled();
+    expect(b.logout).not.toHaveBeenCalled();
   });
 });
 
@@ -84,7 +84,7 @@ describe("Mises à jour poussées", () => {
       order.push("conversations");
       return [];
     });
-    await act(async () => b.emit({ processed: 1, new_messages: 1, changed_conversations: ["aa"], rejected: 0 }));
+    await act(async () => b.emit(report({ processed: 1, new_messages: 1, changed_conversations: ["aa"] })));
     expect(order).toEqual(["markRead", "conversations"]);
   });
 });

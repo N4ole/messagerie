@@ -86,6 +86,14 @@ Liste exhaustive des endroits où nous assemblons des primitives :
 5. Calcul du safety number.
 6. Remplissage (padding) des messages par paliers.
 
+## 8 bis. Ordonnancement des commits (Phase 2)
+
+Un seul membre — l'administrateur du groupe — émet les commits ; les autres
+envoient des propositions qu'il valide (ADR-0012). Un commit d'un autre
+membre est rejeté avant application. La rotation automatique suit cette
+règle : l'administrateur émet un commit `Update`, les autres membres une
+proposition `Update`.
+
 ## 9. Messages éphémères et suppression programmée
 
 - Le délai d'expiration est **dans le contenu chiffré** (le serveur ne le connaît pas) + un `delete_after` serveur grossier (arrondi à l'heure) pour purger les blobs non retirés.
@@ -97,6 +105,6 @@ Liste exhaustive des endroits où nous assemblons des primitives :
 
 1. Lecture du fichier → si image : **décodage + ré-encodage** par `msg-media` (supprime EXIF/GPS/XMP/IPTC/profils, corrige l'orientation) ; autres formats : envoyés tels quels, l'UI avertit que les métadonnées internes (PDF, DOCX…) ne sont pas nettoyées.
 2. Génération de la miniature côté client.
-3. Chiffrement fichier + miniature avec deux clés aléatoires distinctes.
+3. Chiffrement du fichier (XChaCha20-Poly1305, clé aléatoire par fichier, AEAD en un seul bloc, 25 Mio max.) ; la miniature voyage dans le message MLS lui-même (donc chiffrée par MLS).
 4. Upload des blobs (nom aléatoire côté serveur, taille arrondie au palier supérieur).
 5. Le message MLS contient : `{nom de fichier, MIME, taille réelle, clé, hash, id de blob, miniature chiffrée}` — donc **nom et miniature chiffrés**.

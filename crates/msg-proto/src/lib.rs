@@ -10,6 +10,9 @@ use uuid::Uuid;
 
 pub mod b64;
 
+/// Types WebAuthn standards (W3C), partagés par le serveur et les clients.
+pub use webauthn_rs_proto as webauthn;
+
 /// Version du protocole applicatif (préfixe des routes).
 pub const API_PREFIX: &str = "/v1";
 
@@ -26,6 +29,10 @@ pub const REQUEST_MAX_SKEW_SECS: i64 = 60;
 
 /// Taille maximale d'un blob (message MLS) accepté par le serveur.
 pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
+
+/// Taille maximale d'un blob de pièce jointe chiffrée (25 Mio de clair
+/// complétés au palier supérieur, plus nonce et étiquette AEAD).
+pub const MAX_ATTACHMENT_BLOB_BYTES: usize = 26 * 1024 * 1024;
 
 /// Nombre maximal de KeyPackages par envoi.
 pub const MAX_KEY_PACKAGES_PER_UPLOAD: usize = 100;
@@ -241,8 +248,61 @@ pub struct ConfirmTotpRequest {
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
+    /// Second facteur TOTP (ignoré si `webauthn` est fourni).
+    #[serde(default)]
     pub totp_code: String,
+    /// Second facteur WebAuthn (passkey / clé de sécurité FIDO2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webauthn: Option<WebauthnAssertion>,
     pub device: DeviceRegistration,
+}
+
+// ---------------------------------------------------------------------------
+// WebAuthn (passkeys, YubiKey)
+// ---------------------------------------------------------------------------
+
+/// Réponse d'un authentificateur à un défi de connexion.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnAssertion {
+    pub challenge_id: Uuid,
+    pub credential: webauthn::PublicKeyCredential,
+}
+
+/// Demande de défi de connexion : le mot de passe est vérifié d'abord.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct WebauthnChallengeRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// Défi d'enregistrement d'une nouvelle clé.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnRegisterChallenge {
+    pub challenge_id: Uuid,
+    pub options: webauthn::CreationChallengeResponse,
+}
+
+/// Défi de connexion.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnLoginChallenge {
+    pub challenge_id: Uuid,
+    pub options: webauthn::RequestChallengeResponse,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnRegisterFinish {
+    pub challenge_id: Uuid,
+    /// Nom choisi par l'utilisateur (« YubiKey bureau »…).
+    pub name: String,
+    pub credential: webauthn::RegisterPublicKeyCredential,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WebauthnCredentialSummary {
+    pub id: i64,
+    pub name: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -342,6 +402,11 @@ pub struct AckRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PushEvent {
     NewMessages,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentUploadResponse {
+    pub blob_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

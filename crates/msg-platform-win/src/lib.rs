@@ -7,12 +7,27 @@
 
 use zeroize::Zeroizing;
 
+pub mod capture;
+pub mod tpm;
+pub mod webauthn;
+
+#[cfg(windows)]
+pub(crate) fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PlatformError {
     #[error("fonction non disponible sur ce système")]
     Unsupported,
     #[error("échec de l'appel système Windows (code {0})")]
     Win32(u32),
+    #[error("échec de l'appel système Windows (HRESULT 0x{0:08X})")]
+    HResult(u32),
+    #[error("opération annulée ou refusée par l'utilisateur")]
+    Cancelled,
+    #[error("paramètre invalide : {0}")]
+    Invalid(&'static str),
 }
 
 /// `true` si la protection DPAPI est disponible.

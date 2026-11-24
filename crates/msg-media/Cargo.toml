@@ -1,0 +1,11 @@
+[package]
+name = "msg-media"
+description = "Nettoyage des images (suppression EXIF/GPS/XMP par ré-encodage) et miniatures, en Rust sûr."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+thiserror.workspace = true
