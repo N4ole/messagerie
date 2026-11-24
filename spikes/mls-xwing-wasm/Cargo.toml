@@ -1,0 +1,22 @@
+# Sonde de faisabilité Phase 0 — hors workspace, jetable.
+[package]
+name = "spike-mls-xwing-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+openmls = { version = "0.9", features = ["draft-ietf-mls-pq-ciphersuites"] }
+openmls_libcrux_crypto = { version = "0.4", features = ["draft-ietf-mls-pq-ciphersuites"] }
+openmls_basic_credential = "0.6"
+openmls_traits = { version = "0.6", features = ["draft-ietf-mls-pq-ciphersuites"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+openmls = { version = "0.9", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+wasm-bindgen = "=0.2.130"
