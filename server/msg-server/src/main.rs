@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
             let cfg = Config::from_env()?;
             let r = msg_server::routes::admin::bootstrap_admin(&pool, &username, cfg.activation_ttl_secs).await?;
             // Affiché une seule fois sur la sortie standard, jamais journalisé.
-            println!("Administrateur « {} » créé.", r.username);
+            println!("Administrateur créé.");
             println!("Code d'activation (à usage unique, expire le {}): {}", r.expires_at, r.activation_code);
         }
         Cmd::Serve { bind } => {

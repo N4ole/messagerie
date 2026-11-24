@@ -104,13 +104,19 @@ pub(crate) fn write_private(path: &Path, data: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Mot de passe aléatoire (aucune valeur secrète en dur, même en test).
+    fn random_password() -> String {
+        hex::encode(msg_crypto::random_bytes::<16>().unwrap())
+    }
+
     #[test]
     fn create_and_open() {
         let d = tempfile::tempdir().unwrap();
         let p = AccountPaths::new(d.path(), "https://s", "alice");
-        let k = create(&p, "mot de passe local", Argon2Params::INSECURE_FOR_TESTS).unwrap();
-        assert_eq!(*open(&p, "mot de passe local").unwrap(), *k);
-        assert!(matches!(open(&p, "faux"), Err(ClientError::WrongPassword)));
+        let (good, bad) = (random_password(), random_password());
+        let k = create(&p, &good, Argon2Params::INSECURE_FOR_TESTS).unwrap();
+        assert_eq!(*open(&p, &good).unwrap(), *k);
+        assert!(matches!(open(&p, &bad), Err(ClientError::WrongPassword)));
         // Le fichier ne contient pas la clé en clair.
         let raw = std::fs::read(&p.vault).unwrap();
         assert!(!String::from_utf8_lossy(&raw).contains(&hex::encode(*k)));

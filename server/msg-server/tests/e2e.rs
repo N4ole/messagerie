@@ -96,13 +96,10 @@ async fn restart_resumes_session_and_mls_state() {
     drop(bob); // fermeture de l'application
 
     // Mauvais mot de passe local : refus sans contacter le serveur.
-    assert!(matches!(
-        Client::login(&bob_cfg, "bob", "mauvais mot de passe!", None).await,
-        Err(ClientError::WrongPassword)
-    ));
+    assert!(matches!(Client::login(&bob_cfg, "bob", &wrong_password(), None).await, Err(ClientError::WrongPassword)));
 
     // Reprise sans TOTP grâce à la session encore valide.
-    let mut bob = Client::login(&bob_cfg, "bob", PASSWORD, None).await.unwrap();
+    let mut bob = Client::login(&bob_cfg, "bob", password(), None).await.unwrap();
     bob.sync().await.unwrap();
     let c = &bob.conversations().unwrap()[0];
     assert_eq!(bob.messages(&c.id, 10).unwrap()[0].text, "avant redémarrage");
@@ -110,15 +107,15 @@ async fn restart_resumes_session_and_mls_state() {
     alice.send_text(&conv.id, "après redémarrage").await.unwrap();
     let cid = c.id.clone();
     drop(bob);
-    let mut bob = Client::login(&bob_cfg, "bob", PASSWORD, None).await.unwrap();
+    let mut bob = Client::login(&bob_cfg, "bob", password(), None).await.unwrap();
     assert_eq!(bob.sync().await.unwrap().new_messages, 1);
     assert_eq!(bob.messages(&cid, 10).unwrap().len(), 2);
 
     // Déconnexion : la reprise sans TOTP n'est plus possible.
     bob.logout().await.unwrap();
-    assert!(matches!(Client::login(&bob_cfg, "bob", PASSWORD, None).await, Err(ClientError::TotpRequired)));
+    assert!(matches!(Client::login(&bob_cfg, "bob", password(), None).await, Err(ClientError::TotpRequired)));
     // Avec un nouveau code TOTP (pas suivant, l'ancien est consommé).
-    let bob = Client::login(&bob_cfg, "bob", PASSWORD, Some(&totp_code(&bob_totp, 1))).await.unwrap();
+    let bob = Client::login(&bob_cfg, "bob", password(), Some(&totp_code(&bob_totp, 1))).await.unwrap();
     assert_eq!(bob.messages(&cid, 10).unwrap().len(), 2);
 }
 
@@ -135,33 +132,33 @@ async fn authentication_rules() {
     // Code d'activation : usage unique et invalide pour un autre compte.
     let r = admin.api().admin_create("carol", msg_proto::Role::User).await.unwrap();
     let cfg = s.config();
-    assert!(Client::activate(&cfg, "bob", &r.activation_code, PASSWORD).await.is_err());
-    Client::activate(&cfg, "carol", &r.activation_code, PASSWORD).await.unwrap();
-    assert!(Client::activate(&cfg, "carol", &r.activation_code, PASSWORD).await.is_err());
+    assert!(Client::activate(&cfg, "bob", &r.activation_code, password()).await.is_err());
+    Client::activate(&cfg, "carol", &r.activation_code, password()).await.unwrap();
+    assert!(Client::activate(&cfg, "carol", &r.activation_code, password()).await.is_err());
     // Mot de passe trop court refusé.
     let r = admin.api().admin_create("dave", msg_proto::Role::User).await.unwrap();
     assert!(Client::activate(&cfg, "dave", &r.activation_code, "court").await.is_err());
 
     // Rejeu du code TOTP déjà utilisé à l'enrôlement : refusé.
     drop(alice);
-    let e = Client::login(&alice_cfg, "alice", PASSWORD, Some(&totp_code(&alice_totp, 0))).await.err().unwrap();
+    let e = Client::login(&alice_cfg, "alice", password(), Some(&totp_code(&alice_totp, 0))).await.err().unwrap();
     assert_eq!(e.api_code(), Some(ErrorCode::InvalidCredentials));
 
     // Suspension : sessions révoquées, connexion refusée.
-    let alice = Client::login(&alice_cfg, "alice", PASSWORD, Some(&totp_code(&alice_totp, 1))).await.unwrap();
+    let alice = Client::login(&alice_cfg, "alice", password(), Some(&totp_code(&alice_totp, 1))).await.unwrap();
     admin.api().admin_set_status("alice", AccountStatus::Suspended).await.unwrap();
     assert!(alice.api().key_package_count().await.is_err());
     drop(alice);
-    let e = Client::login(&alice_cfg, "alice", PASSWORD, None).await.err().unwrap();
+    let e = Client::login(&alice_cfg, "alice", password(), None).await.err().unwrap();
     assert!(matches!(e, ClientError::TotpRequired | ClientError::Api { .. }), "{e:?}");
     admin.api().admin_set_status("alice", AccountStatus::Active).await.unwrap();
 
     // Verrouillage après 5 échecs (mot de passe faux sur le serveur).
     for _ in 0..5 {
-        let e = raw_login(&s.url, "alice", "mauvais mot de passe 123", "000000").await;
+        let e = raw_login(&s.url, "alice", &wrong_password(), "000000").await;
         assert_eq!(e, 401);
     }
-    assert_eq!(raw_login(&s.url, "alice", PASSWORD, "000000").await, 429);
+    assert_eq!(raw_login(&s.url, "alice", password(), "000000").await, 429);
 
     // Un administrateur ne peut pas se suspendre lui-même.
     assert!(admin.api().admin_set_status("admin", AccountStatus::Suspended).await.is_err());
@@ -190,7 +187,7 @@ async fn signed_requests_resist_replay_and_tampering() {
     let admin = s.admin().await;
     let r = admin.api().admin_create("mallory", msg_proto::Role::User).await.unwrap();
     let cfg = s.config();
-    let act = Client::activate(&cfg, "mallory", &r.activation_code, PASSWORD).await.unwrap();
+    let act = Client::activate(&cfg, "mallory", &r.activation_code, password()).await.unwrap();
 
     // Appareil construit à la main pour maîtriser la clé API.
     let identity = SigningKeyPair::generate().unwrap();
@@ -209,7 +206,7 @@ async fn signed_requests_resist_replay_and_tampering() {
         .post(format!("{}/v1/auth/confirm-totp", s.url))
         .json(&ConfirmTotpRequest {
             username: "mallory".into(),
-            password: PASSWORD.into(),
+            password: password().into(),
             totp_code: totp_code(&act.totp_secret_base32, 0),
             device: DeviceRegistration {
                 device_id,
@@ -256,7 +253,7 @@ async fn signed_requests_resist_replay_and_tampering() {
 
     // Certificat d'appareil invalide refusé à la connexion.
     let bad = serde_json::json!({
-        "username": "mallory", "password": PASSWORD, "totp_code": totp_code(&act.totp_secret_base32, 1),
+        "username": "mallory", "password": password(), "totp_code": totp_code(&act.totp_secret_base32, 1),
         "device": { "device_id": uuid::Uuid::new_v4(),
             "identity_key": base64_32(&identity.public_bytes()), "api_key": base64_32(&api_key.public_bytes()),
             "mls_signature_key": base64_32(&[1u8; 32]), "cert_created_at": 1,

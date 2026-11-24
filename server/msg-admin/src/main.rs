@@ -105,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Enroll => unreachable!(),
         Cmd::Create { username, role } => {
             let r = api.admin_create(&username, parse_role(&role)?).await?;
-            println!("Compte « {} » créé.", r.username);
+            println!("Compte créé.");
             println!("Code d'activation (usage unique, expire à {} UTC Unix) : {}", r.expires_at, r.activation_code);
         }
         Cmd::List => {
@@ -116,19 +116,19 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Suspend { username } => {
             api.admin_set_status(&username, AccountStatus::Suspended).await?;
-            println!("Compte « {username} » suspendu.");
+            println!("Compte suspendu.");
         }
         Cmd::Unsuspend { username } => {
             api.admin_set_status(&username, AccountStatus::Active).await?;
-            println!("Compte « {username} » réactivé.");
+            println!("Compte réactivé.");
         }
         Cmd::Role { username, role } => {
             api.admin_set_role(&username, parse_role(&role)?).await?;
-            println!("Rôle de « {username} » : {role}.");
+            println!("Rôle mis à jour : {role}.");
         }
         Cmd::Reset { username } => {
             let r = api.admin_reset(&username).await?;
-            println!("Compte « {} » réinitialisé. Ses contacts verront un changement d'identité.", r.username);
+            println!("Compte réinitialisé. Ses contacts verront un changement d'identité.");
             println!("Nouveau code d'activation : {}", r.activation_code);
         }
         Cmd::Devices { username } => {

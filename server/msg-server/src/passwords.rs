@@ -114,17 +114,24 @@ mod tests {
         c
     }
 
+    fn random_string() -> String {
+        hex::encode(msg_crypto::random_bytes::<16>().unwrap())
+    }
+
     #[test]
     fn password_hash_and_pepper() {
         let c = cfg();
-        let h = PasswordHasherCfg { pepper: b"pepper-a", cfg: &c };
-        let stored = h.hash("une longue phrase de passe").unwrap();
+        let (pepper_a, pepper_b) =
+            (msg_crypto::random_bytes::<32>().unwrap(), msg_crypto::random_bytes::<32>().unwrap());
+        let (pw, bad) = (random_string(), random_string());
+        let h = PasswordHasherCfg { pepper: &pepper_a, cfg: &c };
+        let stored = h.hash(&pw).unwrap();
         assert!(stored.starts_with("$argon2id$"));
-        assert!(h.verify("une longue phrase de passe", Some(&stored)).unwrap());
-        assert!(!h.verify("mauvais", Some(&stored)).unwrap());
-        let other = PasswordHasherCfg { pepper: b"pepper-b", cfg: &c };
-        assert!(!other.verify("une longue phrase de passe", Some(&stored)).unwrap());
-        assert!(!h.verify("x", None).unwrap());
+        assert!(h.verify(&pw, Some(&stored)).unwrap());
+        assert!(!h.verify(&bad, Some(&stored)).unwrap());
+        let other = PasswordHasherCfg { pepper: &pepper_b, cfg: &c };
+        assert!(!other.verify(&pw, Some(&stored)).unwrap());
+        assert!(!h.verify(&pw, None).unwrap());
     }
 
     #[test]

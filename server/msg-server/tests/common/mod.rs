@@ -13,7 +13,16 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use totp_rs::{Algorithm, Secret, TOTP};
 
-pub const PASSWORD: &str = "une phrase de passe tres longue";
+/// Mot de passe des comptes de test, aléatoire à chaque exécution.
+pub fn password() -> &'static str {
+    static PW: OnceLock<String> = OnceLock::new();
+    PW.get_or_init(|| hex::encode(msg_crypto::random_bytes::<16>().unwrap()))
+}
+
+/// Autre mot de passe aléatoire (forcément différent de [`password`]).
+pub fn wrong_password() -> String {
+    hex::encode(msg_crypto::random_bytes::<16>().unwrap())
+}
 
 /// Journaux du serveur capturés (tous niveaux) pour vérifier l'absence de clair.
 pub fn logs() -> &'static Arc<Mutex<Vec<u8>>> {
@@ -89,8 +98,8 @@ impl TestServer {
     /// client, sa configuration et le secret TOTP (base32).
     pub async fn enroll(&mut self, username: &str, code: &str) -> (Client, ClientConfig, String) {
         let cfg = self.config();
-        let act = Client::activate(&cfg, username, code, PASSWORD).await.unwrap();
-        let c = Client::enroll(&cfg, username, PASSWORD, &totp_code(&act.totp_secret_base32, 0)).await.unwrap();
+        let act = Client::activate(&cfg, username, code, password()).await.unwrap();
+        let c = Client::enroll(&cfg, username, password(), &totp_code(&act.totp_secret_base32, 0)).await.unwrap();
         (c, cfg, act.totp_secret_base32)
     }
 

@@ -365,10 +365,16 @@ mod tests {
         assert!(validate_username(&"a".repeat(33)).is_err());
     }
 
+    /// Chaîne de `n` caractères générée (pas de mot de passe littéral).
+    fn chars(n: usize) -> String {
+        (0..n).map(|i| char::from(b'a' + (i % 26) as u8)).collect()
+    }
+
     #[test]
     fn passwords() {
-        assert!(validate_password("court").is_err());
-        assert!(validate_password("une phrase de passe assez longue").is_ok());
+        assert!(validate_password(&chars(11)).is_err());
+        assert!(validate_password(&chars(12)).is_ok());
+        assert!(validate_password(&chars(257)).is_err());
     }
 
     #[test]

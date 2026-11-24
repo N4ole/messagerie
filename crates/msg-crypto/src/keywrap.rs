@@ -91,28 +91,37 @@ pub fn unwrap(w: &WrappedKey, password: &str) -> Result<Zeroizing<[u8; 32]>> {
 mod tests {
     use super::*;
 
+    // Clés et mots de passe aléatoires : aucune valeur secrète en dur.
+    fn key() -> [u8; 32] {
+        random_bytes::<32>().unwrap()
+    }
+    fn password() -> String {
+        hex::encode(random_bytes::<16>().unwrap())
+    }
+
     #[test]
     fn wrap_unwrap() {
-        let k = [9u8; 32];
-        let w = wrap(&k, "mot de passe correct", Argon2Params::INSECURE_FOR_TESTS).unwrap();
-        assert_eq!(*unwrap(&w, "mot de passe correct").unwrap(), k);
-        assert!(matches!(unwrap(&w, "mauvais"), Err(CryptoError::Decrypt)));
+        let (k, pw, bad) = (key(), password(), password());
+        let w = wrap(&k, &pw, Argon2Params::INSECURE_FOR_TESTS).unwrap();
+        assert_eq!(*unwrap(&w, &pw).unwrap(), k);
+        assert!(matches!(unwrap(&w, &bad), Err(CryptoError::Decrypt)));
     }
 
     #[test]
     fn params_are_authenticated() {
-        let k = [9u8; 32];
-        let mut w = wrap(&k, "pw", Argon2Params::INSECURE_FOR_TESTS).unwrap();
+        let (k, pw) = (key(), password());
+        let mut w = wrap(&k, &pw, Argon2Params::INSECURE_FOR_TESTS).unwrap();
         w.params.t = 2;
-        assert!(unwrap(&w, "pw").is_err());
+        assert!(unwrap(&w, &pw).is_err());
     }
 
     #[test]
     fn json_roundtrip() {
-        let w = wrap(&[1u8; 32], "pw", Argon2Params::INSECURE_FOR_TESTS).unwrap();
+        let (k, pw) = (key(), password());
+        let w = wrap(&k, &pw, Argon2Params::INSECURE_FOR_TESTS).unwrap();
         let j = serde_json::to_string(&w).unwrap();
         let w2: WrappedKey = serde_json::from_str(&j).unwrap();
-        assert_eq!(*unwrap(&w2, "pw").unwrap(), [1u8; 32]);
+        assert_eq!(*unwrap(&w2, &pw).unwrap(), k);
     }
 }
 
@@ -147,10 +156,10 @@ mod seal_tests {
 
     #[test]
     fn seal_open() {
-        let k = [5u8; 32];
+        let (k, other) = (random_bytes::<32>().unwrap(), random_bytes::<32>().unwrap());
         let s = seal(&k, b"donnees", b"ctx").unwrap();
         assert_eq!(&open(&k, &s, b"ctx").unwrap()[..], b"donnees");
         assert!(open(&k, &s, b"autre").is_err());
-        assert!(open(&[6u8; 32], &s, b"ctx").is_err());
+        assert!(open(&other, &s, b"ctx").is_err());
     }
 }
