@@ -22,6 +22,13 @@ ignore = [
   # dépendance optionnelle openmls_sqlite_storage (rusqlite ^0.37) ; à lever
   # avec OpenMLS 0.10.
   { id = "RUSTSEC-2026-0459", reason = "pas de mode WAL ; mise à jour bloquée par openmls 0.9" },
+  # rsa 0.10.0-rc.19 (via webauthn-rs 0.6 → crypto-glue) : attaque Marvin
+  # (canal temporel sur les opérations à clé PRIVÉE). webauthn-rs n'utilise
+  # RSA que pour VÉRIFIER des signatures RS256 avec des clés publiques ; la
+  # série 0.10 (dont cette RC) intègre déjà les contre-mesures en temps
+  # constant. La 0.10.0 stable est bloquée par crypto-glue (feature `sha2`
+  # retirée). Notre RSA TPM passe par CNG, pas par ce crate.
+  { id = "RUSTSEC-2023-0071", reason = "vérification de signatures publiques uniquement ; série 0.10 corrigée" },
 ]
 
 [licenses]

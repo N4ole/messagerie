@@ -3,14 +3,14 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BackendContext } from "../src/api/context";
 import { Auth } from "../src/views/Auth";
-import { mockBackend } from "./mockBackend";
+import { mockBackend, session } from "./mockBackend";
 
 describe("Authentification", () => {
   it("demande le TOTP quand la session a expiré", async () => {
     const login = vi
       .fn()
       .mockRejectedValueOnce({ kind: "totp_required", message: "code TOTP requis" })
-      .mockResolvedValueOnce({ username: "alice", deviceId: "d", fingerprint: "FP" });
+      .mockResolvedValueOnce(session);
     const b = mockBackend({ login });
     const onSession = vi.fn();
     render(
@@ -26,7 +26,7 @@ describe("Authentification", () => {
     await userEvent.type(screen.getByLabelText(/Code TOTP/), "123456");
     await userEvent.click(screen.getByRole("button", { name: "Se connecter" }));
     expect(login).toHaveBeenLastCalledWith("http://127.0.0.1:8080", "alice", "une phrase de passe", "123456");
-    expect(onSession).toHaveBeenCalledWith({ username: "alice", deviceId: "d", fingerprint: "FP" });
+    expect(onSession).toHaveBeenCalledWith(session);
   });
 
   it("enchaîne activation puis configuration du TOTP", async () => {
