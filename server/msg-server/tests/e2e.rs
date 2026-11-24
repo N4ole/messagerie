@@ -137,7 +137,8 @@ async fn authentication_rules() {
     assert!(Client::activate(&cfg, "carol", &r.activation_code, password()).await.is_err());
     // Mot de passe trop court refusé.
     let r = admin.api().admin_create("dave", msg_proto::Role::User).await.unwrap();
-    assert!(Client::activate(&cfg, "dave", &r.activation_code, "court").await.is_err());
+    let too_short = &password()[..11];
+    assert!(Client::activate(&cfg, "dave", &r.activation_code, too_short).await.is_err());
 
     // Rejeu du code TOTP déjà utilisé à l'enrôlement : refusé.
     drop(alice);
