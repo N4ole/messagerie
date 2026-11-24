@@ -36,7 +36,7 @@ Vérification d'intégrité au démarrage, signature Authenticode effective, bui
 | D1 | Protocole 1-à-1 | **MLS partout** (MIT, WASM, multi-appareils) plutôt que libsignal (AGPL, pas de WASM officiel) |
 | D2 | Authentification par mot de passe | Argon2id serveur comme demandé en Phase 1 ; **migration OPAQUE** en Phase 5 si tu l'acceptes |
 | D3 | Frontend | React + TypeScript |
-| D4 | Suite MLS par défaut | X-Wing (hybride PQ) avec repli X25519 |
+| D4 | Suite MLS par défaut | Hybride PQ ML-KEM-768 + X25519 (révisé en Phase 1, ADR-0011) |
 | D5 | Hébergement des services onion | C tor côté serveur, arti côté client |
 | D6 | TOTP obligatoire ? | Obligatoire par défaut, désactivable par politique de site |
 | D7 | Licence | Conserver MIT (compatible avec toutes les dépendances retenues : OpenMLS MIT, akd MIT/Apache, arti MIT/Apache, Tauri MIT/Apache ; `webauthn-rs` MPL-2.0, copyleft au niveau fichier, compatible ; seules d'éventuelles modifications de ses propres fichiers devraient être publiées sous MPL) |

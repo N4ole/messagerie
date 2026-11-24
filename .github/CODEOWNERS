@@ -1,0 +1,6 @@
+# Revue obligatoire du propriétaire pour le code sensible.
+*                         @N4ole
+/crates/msg-crypto/       @N4ole
+/crates/msg-platform-win/ @N4ole
+/server/msg-server/src/auth.rs @N4ole
+/.github/                 @N4ole

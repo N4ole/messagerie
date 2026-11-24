@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions minimales de la fenêtre principale : commandes de messagerie et réception d'événements. Aucun accès fichier, shell, réseau ou presse-papiers depuis la WebView.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-activate",
+    "allow-enroll",
+    "allow-login",
+    "allow-logout",
+    "allow-conversations",
+    "allow-messages",
+    "allow-start-conversation",
+    "allow-send-message",
+    "allow-mark-read",
+    "allow-sync"
+  ]
+}

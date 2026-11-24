@@ -1,0 +1,314 @@
+//! Client HTTP de l'API v1. Toute requête authentifiée est signée par la clé
+//! API de l'appareil (horodatage + nonce) et porte le jeton d'accès.
+
+use std::sync::Mutex;
+
+use msg_crypto::identity::SigningKeyPair;
+use msg_crypto::request::sign_request;
+use msg_proto::*;
+use reqwest::{Method, StatusCode};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use url::Url;
+use uuid::Uuid;
+
+use crate::error::{ClientError, Result};
+
+/// Vérifie l'URL du serveur : HTTPS obligatoire, sauf boucle locale (développement).
+pub fn validate_server_url(raw: &str, allow_insecure: bool) -> Result<Url> {
+    let url = Url::parse(raw.trim()).map_err(|e| ClientError::InsecureUrl(e.to_string()))?;
+    let loopback = matches!(url.host_str(), Some("localhost") | Some("127.0.0.1") | Some("[::1]") | Some("::1"));
+    match url.scheme() {
+        "https" => {}
+        "http" if loopback || allow_insecure => {}
+        _ => return Err(ClientError::InsecureUrl("HTTPS obligatoire (HTTP accepté uniquement en local)".into())),
+    }
+    if url.username() != "" || url.password().is_some() || url.query().is_some() {
+        return Err(ClientError::InsecureUrl("l'URL ne doit contenir ni identifiants ni paramètres".into()));
+    }
+    Ok(url)
+}
+
+/// Message WebSocket (réexporté pour les applications).
+pub use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+pub struct DeviceAuth {
+    pub device_id: Uuid,
+    pub api_key: SigningKeyPair,
+}
+
+pub struct ApiClient {
+    http: reqwest::Client,
+    base: Url,
+    device: Option<DeviceAuth>,
+    tokens: Mutex<Option<SessionTokens>>,
+}
+
+async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
+    let status = resp.status();
+    if status.is_success() {
+        if status == StatusCode::NO_CONTENT {
+            return serde_json::from_str("null").map_err(|e| ClientError::Invalid(e.to_string()));
+        }
+        return resp.json::<T>().await.map_err(ClientError::from);
+    }
+    let code = status.as_u16();
+    match resp.json::<ApiError>().await {
+        Ok(e) => Err(ClientError::Api { status: code, code: e.code, message: e.message }),
+        Err(_) => {
+            Err(ClientError::Api { status: code, code: ErrorCode::Internal, message: format!("erreur HTTP {code}") })
+        }
+    }
+}
+
+impl ApiClient {
+    pub fn new(base: Url) -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .user_agent("messagerie")
+            .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .https_only(base.scheme() == "https")
+            .build()?;
+        Ok(Self { http, base, device: None, tokens: Mutex::new(None) })
+    }
+
+    pub fn base(&self) -> &Url {
+        &self.base
+    }
+
+    pub fn set_device(&mut self, d: DeviceAuth) {
+        self.device = Some(d);
+    }
+
+    pub fn device_id(&self) -> Option<Uuid> {
+        self.device.as_ref().map(|d| d.device_id)
+    }
+
+    pub fn set_tokens(&self, t: Option<SessionTokens>) {
+        *self.tokens.lock().unwrap_or_else(|e| e.into_inner()) = t;
+    }
+
+    pub fn tokens(&self) -> Option<SessionTokens> {
+        self.tokens.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn url(&self, path_and_query: &str) -> Result<Url> {
+        self.base.join(path_and_query).map_err(|e| ClientError::Invalid(e.to_string()))
+    }
+
+    async fn public<B: Serialize, T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&B>,
+    ) -> Result<T> {
+        let mut rb = self.http.request(method, self.url(path)?);
+        if let Some(b) = body {
+            rb = rb.json(b);
+        }
+        decode(rb.send().await?).await
+    }
+
+    fn signed_builder(&self, method: Method, path: &str, body: &[u8], bearer: bool) -> Result<reqwest::RequestBuilder> {
+        let dev = self.device.as_ref().ok_or(ClientError::NotLoggedIn)?;
+        let url = self.url(path)?;
+        let pq = match url.query() {
+            Some(q) => format!("{}?{}", url.path(), q),
+            None => url.path().to_owned(),
+        };
+        let h = sign_request(&dev.api_key, &dev.device_id, method.as_str(), &pq, body, crate::now_secs())?;
+        let mut rb = self
+            .http
+            .request(method, url)
+            .header(headers::DEVICE, h.device)
+            .header(headers::TIMESTAMP, h.timestamp)
+            .header(headers::NONCE, h.nonce)
+            .header(headers::SIGNATURE, h.signature);
+        if bearer {
+            let t = self.tokens().ok_or(ClientError::NotLoggedIn)?;
+            rb = rb.bearer_auth(t.access_token);
+        }
+        if !body.is_empty() {
+            rb = rb.header(reqwest::header::CONTENT_TYPE, "application/json").body(body.to_vec());
+        }
+        Ok(rb)
+    }
+
+    /// Requête authentifiée ; renouvelle la session une fois si le jeton
+    /// d'accès a expiré.
+    pub async fn call<B: Serialize, T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&B>,
+    ) -> Result<T> {
+        let bytes = match body {
+            Some(b) => serde_json::to_vec(b).map_err(|e| ClientError::Invalid(e.to_string()))?,
+            None => Vec::new(),
+        };
+        let needs_refresh = self.tokens().is_some_and(|t| t.access_expires_at <= crate::now_secs() + 5);
+        if needs_refresh {
+            self.refresh().await?;
+        }
+        let resp = self.signed_builder(method.clone(), path, &bytes, true)?.send().await?;
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            self.refresh().await?;
+            return decode(self.signed_builder(method, path, &bytes, true)?.send().await?).await;
+        }
+        decode(resp).await
+    }
+
+    /// Renouvelle les jetons à l'aide du jeton de rafraîchissement (rotation).
+    pub async fn refresh(&self) -> Result<SessionTokens> {
+        let dev = self.device.as_ref().ok_or(ClientError::NotLoggedIn)?;
+        let t = self.tokens().ok_or(ClientError::NotLoggedIn)?;
+        let body = serde_json::to_vec(&RefreshRequest { device_id: dev.device_id, refresh_token: t.refresh_token })
+            .map_err(|e| ClientError::Invalid(e.to_string()))?;
+        let resp = self.signed_builder(Method::POST, "/v1/auth/refresh", &body, false)?.send().await?;
+        match decode::<SessionTokens>(resp).await {
+            Ok(n) => {
+                self.set_tokens(Some(n.clone()));
+                Ok(n)
+            }
+            Err(e) => {
+                self.set_tokens(None);
+                Err(e)
+            }
+        }
+    }
+
+    // --- Routes publiques -------------------------------------------------
+
+    pub async fn health(&self) -> Result<HealthResponse> {
+        self.public::<(), _>(Method::GET, "/v1/health", None).await
+    }
+
+    pub async fn activate(&self, req: &ActivateRequest) -> Result<ActivateResponse> {
+        self.public(Method::POST, "/v1/auth/activate", Some(req)).await
+    }
+
+    pub async fn confirm_totp(&self, req: &ConfirmTotpRequest) -> Result<SessionTokens> {
+        let t: SessionTokens = self.public(Method::POST, "/v1/auth/confirm-totp", Some(req)).await?;
+        self.set_tokens(Some(t.clone()));
+        Ok(t)
+    }
+
+    pub async fn login(&self, req: &LoginRequest) -> Result<SessionTokens> {
+        let t: SessionTokens = self.public(Method::POST, "/v1/auth/login", Some(req)).await?;
+        self.set_tokens(Some(t.clone()));
+        Ok(t)
+    }
+
+    // --- Routes authentifiées ---------------------------------------------
+
+    pub async fn logout(&self) -> Result<()> {
+        let r = self.call::<(), ()>(Method::POST, "/v1/auth/logout", None).await;
+        self.set_tokens(None);
+        r
+    }
+
+    pub async fn upload_key_packages(&self, kps: Vec<Vec<u8>>) -> Result<()> {
+        self.call(Method::POST, "/v1/keypackages", Some(&UploadKeyPackagesRequest { key_packages: kps })).await
+    }
+
+    pub async fn key_package_count(&self) -> Result<i64> {
+        Ok(self.call::<(), KeyPackageCount>(Method::GET, "/v1/keypackages/count", None).await?.count)
+    }
+
+    pub async fn directory(&self, username: &str) -> Result<UserDirectoryEntry> {
+        validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
+        self.call::<(), _>(Method::GET, &format!("/v1/users/{username}"), None).await
+    }
+
+    pub async fn claim(&self, username: &str) -> Result<UserDirectoryEntry> {
+        validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
+        self.call::<(), _>(Method::POST, &format!("/v1/users/{username}/claim"), None).await
+    }
+
+    pub async fn send(&self, req: &SendRequest) -> Result<SendResponse> {
+        self.call(Method::POST, "/v1/messages", Some(req)).await
+    }
+
+    pub async fn queue(&self, limit: u32) -> Result<QueueResponse> {
+        self.call::<(), _>(Method::GET, &format!("/v1/queue?limit={limit}"), None).await
+    }
+
+    pub async fn ack(&self, ids: Vec<i64>) -> Result<()> {
+        self.call(Method::POST, "/v1/queue/ack", Some(&AckRequest { ids })).await
+    }
+
+    // --- Administration ---------------------------------------------------
+
+    pub async fn admin_create(&self, username: &str, role: Role) -> Result<ActivationCodeResponse> {
+        self.call(Method::POST, "/v1/admin/accounts", Some(&CreateAccountRequest { username: username.into(), role }))
+            .await
+    }
+
+    pub async fn admin_list(&self) -> Result<Vec<AccountSummary>> {
+        self.call::<(), _>(Method::GET, "/v1/admin/accounts", None).await
+    }
+
+    pub async fn admin_set_status(&self, username: &str, status: AccountStatus) -> Result<()> {
+        self.call(Method::PUT, &format!("/v1/admin/accounts/{username}/status"), Some(&SetStatusRequest { status }))
+            .await
+    }
+
+    pub async fn admin_set_role(&self, username: &str, role: Role) -> Result<()> {
+        self.call(Method::PUT, &format!("/v1/admin/accounts/{username}/role"), Some(&SetRoleRequest { role })).await
+    }
+
+    pub async fn admin_reset(&self, username: &str) -> Result<ActivationCodeResponse> {
+        self.call::<(), _>(Method::POST, &format!("/v1/admin/accounts/{username}/reset"), None).await
+    }
+
+    pub async fn admin_devices(&self, username: &str) -> Result<Vec<DeviceSummary>> {
+        self.call::<(), _>(Method::GET, &format!("/v1/admin/accounts/{username}/devices"), None).await
+    }
+
+    pub async fn admin_revoke_device(&self, username: &str, device: Uuid) -> Result<()> {
+        self.call::<(), ()>(Method::DELETE, &format!("/v1/admin/accounts/{username}/devices/{device}"), None).await
+    }
+
+    /// Ouvre le WebSocket de notification (requête d'ouverture signée).
+    pub async fn connect_ws(
+        &self,
+    ) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        if self.tokens().is_some_and(|t| t.access_expires_at <= crate::now_secs() + 5) {
+            self.refresh().await?;
+        }
+        let dev = self.device.as_ref().ok_or(ClientError::NotLoggedIn)?;
+        let t = self.tokens().ok_or(ClientError::NotLoggedIn)?;
+        let mut url = self.url("/v1/ws")?;
+        let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
+        url.set_scheme(scheme).map_err(|_| ClientError::Invalid("schéma".into()))?;
+        let h = sign_request(&dev.api_key, &dev.device_id, "GET", "/v1/ws", b"", crate::now_secs())?;
+        let mut req = url.as_str().into_client_request().map_err(|e| ClientError::Network(e.to_string()))?;
+        let hm = req.headers_mut();
+        let hv = |s: String| s.parse().map_err(|_| ClientError::Invalid("en-tête".into()));
+        hm.insert(headers::DEVICE, hv(h.device)?);
+        hm.insert(headers::TIMESTAMP, hv(h.timestamp)?);
+        hm.insert(headers::NONCE, hv(h.nonce)?);
+        hm.insert(headers::SIGNATURE, hv(h.signature)?);
+        hm.insert("authorization", hv(format!("Bearer {}", t.access_token))?);
+        let (ws, _) = tokio_tungstenite::connect_async(req).await.map_err(|e| ClientError::Network(e.to_string()))?;
+        Ok(ws)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_policy() {
+        assert!(validate_server_url("https://msg.example.org", false).is_ok());
+        assert!(validate_server_url("http://127.0.0.1:8080", false).is_ok());
+        assert!(validate_server_url("http://localhost:8080", false).is_ok());
+        assert!(validate_server_url("http://msg.example.org", false).is_err());
+        assert!(validate_server_url("http://msg.example.org", true).is_ok());
+        assert!(validate_server_url("https://user:pw@msg.example.org", false).is_err());
+        assert!(validate_server_url("ftp://msg.example.org", false).is_err());
+        assert!(validate_server_url("pas une url", false).is_err());
+    }
+}

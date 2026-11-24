@@ -7,7 +7,7 @@
 | Usage | Primitive | Bibliothèque |
 |---|---|---|
 | Groupes et 1-à-1 | MLS RFC 9420 | `openmls` 0.9 |
-| KEM (HPKE) | X-Wing (ML-KEM-768 + X25519), repli X25519 | `openmls_libcrux_crypto` (libcrux, vérifié formellement pour ML-KEM) |
+| KEM (HPKE) | Hybride ML-KEM-768 + X25519, repli X25519 | `openmls_rust_crypto` (RustCrypto : `ml-kem`, `x25519-dalek`) |
 | AEAD messages | ChaCha20-Poly1305 (suite MLS) | idem |
 | Signatures | Ed25519 | idem / `ed25519-dalek` pour les certificats d'appareil |
 | Pièces jointes | XChaCha20-Poly1305, clé aléatoire par fichier, découpage en blocs de 64 Kio avec construction STREAM | `chacha20poly1305` (RustCrypto) — STREAM via `aead::stream` |
@@ -23,11 +23,11 @@
 
 ## 2. Suites MLS
 
-- **Par défaut** : `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (0x004D).
+- **Par défaut** : `MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519` (0x004F, draft-ietf-mls-pq-ciphersuites). *(révisé en Phase 1, voir ADR-0011)*
 - **Repli** (si une limite apparaît en WASM ou si le point de code provisoire change) : `MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519` (0x0003, suite obligatoire du RFC).
 - Un groupe n'a qu'une suite ; un changement de suite = nouveau groupe (migration gérée par le client).
 
-> Attention : 0x004D n'est pas un point de code IANA définitif. Si la spécification X-Wing évolue, les clients de versions différentes ne seront pas compatibles sur cette suite ; la négociation se fait via les *capabilities* des KeyPackages.
+> Attention : 0x004F n'est pas un point de code IANA définitif. Si le brouillon IETF évolue, les clients de versions différentes ne seront pas compatibles sur cette suite ; la négociation se fait via les *capabilities* des KeyPackages.
 
 ## 3. Cycle de vie d'une conversation
 

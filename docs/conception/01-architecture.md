@@ -56,8 +56,8 @@ Principes :
 
 | Couche | Choix | Pourquoi | Écart vs stack suggérée |
 |---|---|---|---|
-| Cœur crypto | **Rust** + **OpenMLS 0.9** (fournisseur `openmls_libcrux_crypto`, repli `openmls_rust_crypto`) | Sécurité mémoire, `zeroize`, compile en natif **et** WASM ; OpenMLS est l'implémentation Rust de référence de RFC 9420, licence MIT | **Écart majeur** : MLS aussi pour le 1-à-1 au lieu du Signal Protocol — voir §3 et [ADR-0002](../adr/0002-mls-pour-tout.md) |
-| Post-quantique | Suite MLS `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (X-Wing = ML-KEM-768 + X25519) | Disponible dans `openmls_libcrux_crypto` 0.4 (vérifié dans le code source) ; hybride, donc pas pire que X25519 seul | Remplace PQXDH. Limite : point de code **provisoire** (draft X-Wing 06), signatures Ed25519 non post-quantiques |
+| Cœur crypto | **Rust** + **OpenMLS 0.9** (fournisseur `openmls_rust_crypto`) *(révisé en Phase 1, voir ADR-0011)* | Sécurité mémoire, `zeroize`, compile en natif **et** WASM ; OpenMLS est l'implémentation Rust de référence de RFC 9420, licence MIT | **Écart majeur** : MLS aussi pour le 1-à-1 au lieu du Signal Protocol — voir §3 et [ADR-0002](../adr/0002-mls-pour-tout.md) |
+| Post-quantique | Suite MLS `MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519` (ML-KEM-768 + X25519, draft-ietf-mls-pq-ciphersuites) *(révisé en Phase 1, voir ADR-0011)* | Disponible dans `openmls_libcrux_crypto` 0.4 (vérifié dans le code source) ; hybride, donc pas pire que X25519 seul | Remplace PQXDH. Limite : point de code **provisoire** (draft X-Wing 06), signatures Ed25519 non post-quantiques |
 | Desktop | **Tauri v2** (2.12) | `.exe` léger (WebView2 système), backend Rust natif, bundler MSI (WiX) + NSIS intégré | Conforme |
 | Frontend | **React 18 + TypeScript + Vite**, CSS local | Écosystème d'accessibilité mature (`react-aria`), un seul code UI desktop/web | Conforme (React plutôt que Svelte, pour l'accessibilité) |
 | Serveur | **Rust / axum 0.8** + `sqlx` + **PostgreSQL 16** | Partage des types (`msg-proto`) avec le client, pas de GC, `tokio` mature | Conforme |
@@ -68,7 +68,7 @@ Principes :
 | Protection de clé | Windows **CNG / Microsoft Platform Crypto Provider** (TPM 2.0) → repli **DPAPI** | La clé maîtresse locale est *scellée* par une clé RSA/ECDH non exportable du TPM | Voir limites : le TPM ne supporte pas Ed25519/X25519 |
 | Tor client | **arti-client** (0.48) | Tor en Rust, embarquable, pas de processus externe | Conforme |
 | Tor serveur | **C tor** pour héberger les services onion v3 (+ Onionbalance en HA) | L'hébergement de services onion dans arti reste moins éprouvé que C tor | Écart justifié ([ADR-0006](../adr/0006-tor.md)) |
-| Format réseau | Protobuf (`prost`) pour l'API, messages MLS sérialisés TLS-codec (RFC 9420) | Schéma versionné, multi-langage, compact | — |
+| Format réseau | JSON versionné (`/v1`) pour l'API *(révisé en Phase 1, voir ADR-0010)*, messages MLS sérialisés TLS-codec (RFC 9420) | Schéma versionné, multi-langage, compact | — |
 | Transport | HTTPS (rustls) + WebSocket ; TLS **épinglé** même au-dessus de Tor | Défense en profondeur | — |
 
 ## 3. Pourquoi MLS pour le 1-à-1 au lieu du Signal Protocol
@@ -86,7 +86,7 @@ Ce qu'on perd (honnêtement) :
 |---|---|---|
 | Confidentialité persistante (FS) par message | Oui | **Oui** (arbre de secrets : chaque clé de message est dérivée puis effacée) |
 | Récupération après compromission (PCS) | À chaque aller-retour (ratchet DH) | **À chaque commit/Update** → on force une rotation automatique (voir §4 de [02-protocole-crypto](02-protocole-crypto.md)) : PCS plus « grossière » |
-| Post-quantique | PQXDH (initial) / SPQR (récent) | X-Wing dans HPKE (chaque commit) |
+| Post-quantique | PQXDH (initial) / SPQR (récent) | KEM hybride ML-KEM-768 + X25519 dans HPKE (chaque commit) |
 | Audit public | Très étudié | RFC 9420 + analyses formelles ; OpenMLS non audité formellement à ce jour (à re-vérifier en Phase 5) |
 
 **Décision à valider** : MLS partout (recommandé), ou Signal + MLS en acceptant AGPL et un client web sans libsignal (ce qui casserait l'interopérabilité web). Voir [08-roadmap](08-roadmap.md) §« Décisions à valider ».
@@ -97,7 +97,7 @@ Ce qu'on perd (honnêtement) :
 
 | Crate | Rôle | Cibles |
 |---|---|---|
-| `msg-proto` | Types d'API (protobuf/prost), versions de protocole, codes d'erreur | natif, wasm, serveur |
+| `msg-proto` | Types d'API (JSON/serde), versions de protocole, codes d'erreur | natif, wasm, serveur |
 | `msg-crypto` | Façade unique sur OpenMLS : identités, KeyPackages, groupes, chiffrement des pièces jointes (AEAD), empreintes/safety numbers, `zeroize` | natif, wasm |
 | `msg-client-core` | Logique client : sessions, conversations, éphémères, détection de changements de clés, file d'envoi ; **traits** `Storage` et `Transport` | natif, wasm |
 | `msg-storage-sqlcipher` | Implémentation `Storage` desktop | natif |
@@ -137,7 +137,7 @@ Ce qu'on perd (honnêtement) :
 Utilisateur alice@site-a
  ├─ Clé d'identité utilisateur (Ed25519)   ← générée sur le 1er appareil, empreinte = safety number
  │    signe ↓ (certificat d'appareil)
- ├─ Appareil 1 (desktop) : clé de signature MLS Ed25519 + KeyPackages (X-Wing)
+ ├─ Appareil 1 (desktop) : clé de signature MLS Ed25519 + KeyPackages (ML-KEM-768 + X25519)
  ├─ Appareil 2 (web)     : idem
  └─ Journal KT : alice → {empreinte identité, liste des appareils actifs, époque}
 ```

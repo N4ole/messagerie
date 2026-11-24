@@ -1,6 +1,6 @@
 # ADR-0005 — Stockage local chiffré et protection de clé TPM/DPAPI
 
-- **Statut** : Proposée (Phase 0)
+- **Statut** : Acceptée (validation de la Phase 0)
 - **Date** : 2026-11-24
 
 ## Contexte

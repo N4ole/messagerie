@@ -1,0 +1,14 @@
+[book]
+title = "Messagerie sécurisée — documentation"
+language = "fr"
+src = "."
+
+[build]
+build-dir = "../target/book"
+create-missing = false
+
+[output.html]
+# Aucune ressource externe (polices, MathJax, etc.).
+no-section-label = false
+mathjax-support = false
+copy-fonts = true

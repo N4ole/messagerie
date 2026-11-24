@@ -1,6 +1,6 @@
 # ADR-0001 — Cœur client unique en Rust (natif + WASM)
 
-- **Statut** : Proposée (Phase 0)
+- **Statut** : Acceptée (validation de la Phase 0)
 - **Date** : 2026-11-24
 
 ## Contexte

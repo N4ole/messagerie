@@ -1,0 +1,21 @@
+{
+  "name": "messagerie",
+  "private": true,
+  "license": "MIT",
+  "packageManager": "pnpm@10.12.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "build:ui": "pnpm --filter @messagerie/ui build",
+    "tauri": "pnpm --filter @messagerie/desktop tauri"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

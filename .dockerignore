@@ -1,0 +1,8 @@
+target
+node_modules
+**/node_modules
+ui/dist
+.git
+spikes/*/target
+*.db
+.env

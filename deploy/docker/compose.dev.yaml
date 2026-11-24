@@ -1,0 +1,32 @@
+# Environnement de DÉVELOPPEMENT uniquement (secrets factices, HTTP local).
+# Usage : MSG_SERVER_SECRET=$(openssl rand -hex 32) docker compose -f deploy/docker/compose.dev.yaml up --build
+name: messagerie-dev
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: messagerie
+      POSTGRES_PASSWORD: messagerie-dev
+      POSTGRES_DB: messagerie
+    volumes: [db:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "messagerie"]
+      interval: 5s
+      retries: 20
+  server:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.server
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://messagerie:messagerie-dev@db:5432/messagerie
+      MSG_SERVER_SECRET: ${MSG_SERVER_SECRET:?définir MSG_SERVER_SECRET (openssl rand -hex 32)}
+      MSG_SITE_NAME: messagerie-dev
+    # Exposé uniquement sur la boucle locale de l'hôte.
+    ports: ["127.0.0.1:8080:8080"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  db:

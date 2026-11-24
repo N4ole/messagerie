@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Messagerie",
+  "mainBinaryName": "messagerie",
+  "version": "0.1.0",
+  "identifier": "org.messagerie.desktop",
+  "build": {
+    "frontendDist": "../../../ui/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm --filter @messagerie/ui dev",
+    "beforeBuildCommand": "pnpm --filter @messagerie/ui build"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Messagerie",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 480
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self'",
+        "img-src": "'self' data:",
+        "font-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-ancestors": "'none'"
+      },
+      "freezePrototype": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "publisher": "Projet Messagerie",
+    "copyright": "MIT",
+    "category": "SocialNetworking",
+    "shortDescription": "Messagerie chiffrée de bout en bout",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico", "icons/icon.png"],
+    "windows": {
+      "webviewInstallMode": { "type": "embedBootstrapper" },
+      "wix": { "language": "fr-FR" },
+      "nsis": { "languages": ["French"], "installMode": "currentUser" }
+    }
+  }
+}

@@ -1,0 +1,56 @@
+# cargo-deny : vulnérabilités, licences, doublons et provenance des crates.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+# Chaque exception est justifiée et réexaminée à chaque phase.
+ignore = [
+  # crypto-bigint 0.5 (via elliptic-curve → p256/p384, tirés par OpenMLS pour
+  # les suites ECDSA/P-256) : variations temporelles sur des opérations
+  # censées être en temps constant. Nous n'effectuons AUCUNE opération à clé
+  # secrète P-256/P-384 (suite utilisée : ML-KEM-768+X25519 / Ed25519) ; seules
+  # des vérifications sur données publiques peuvent être atteintes.
+  # À lever quand OpenMLS passera à elliptic-curve 0.14 / crypto-bigint 0.7.
+  { id = "RUSTSEC-2026-0387", reason = "aucune opération secrète P-256/P-384 atteignable" },
+  # libsqlite3-sys 0.35 (SQLCipher embarqué) : exposition uniquement à
+  # l'ouverture d'un fichier `-wal` écrit par un tiers moins fiable. La base
+  # locale est en `journal_mode = DELETE` (pas de WAL) et n'est écrite que
+  # par l'application. Mise à jour bloquée par la contrainte `links` de la
+  # dépendance optionnelle openmls_sqlite_storage (rusqlite ^0.37) ; à lever
+  # avec OpenMLS 0.10.
+  { id = "RUSTSEC-2026-0459", reason = "pas de mode WAL ; mise à jour bloquée par openmls 0.9" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Licences compatibles avec la distribution sous MIT.
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "0BSD",
+  "CC0-1.0",
+  "Unicode-3.0",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+  "MPL-2.0",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

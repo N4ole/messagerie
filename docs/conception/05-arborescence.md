@@ -10,7 +10,7 @@ messagerie/
 ├── deny.toml                     # cargo-deny : licences autorisées, advisories, sources            P1
 ├── package.json / pnpm-workspace.yaml / pnpm-lock.yaml                                              P1
 ├── crates/
-│   ├── msg-proto/                # types d'API protobuf (prost) + build.rs                         P1
+│   ├── msg-proto/                # types d'API (JSON/serde, ADR-0010)                              P1
 │   │   └── proto/messagerie/v1/*.proto
 │   ├── msg-crypto/               # façade OpenMLS, identités, certificats, safety numbers, AEAD    P1
 │   ├── msg-client-core/          # logique client, traits Storage/Transport                        P1
