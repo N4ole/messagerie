@@ -2,6 +2,7 @@
 
 pub mod account;
 pub mod admin;
+pub mod attachments;
 pub mod keys;
 pub mod messages;
 pub mod ws;
@@ -39,6 +40,11 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/messages", post(messages::send))
         .route("/v1/queue", get(messages::queue))
         .route("/v1/queue/ack", post(messages::ack))
+        .route(
+            "/v1/attachments",
+            post(attachments::upload).layer(DefaultBodyLimit::max(msg_proto::MAX_ATTACHMENT_BLOB_BYTES + 1024)),
+        )
+        .route("/v1/attachments/{id}", get(attachments::download))
         .route("/v1/ws", get(ws::handler))
         .route("/v1/admin/accounts", get(admin::list).post(admin::create))
         .route("/v1/admin/accounts/{username}/status", put(admin::set_status))

@@ -7,12 +7,14 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod attachments;
 pub mod client;
 pub mod conversations;
 pub mod error;
 pub mod store;
 pub mod vault;
 
+pub use attachments::DownloadedFile;
 pub use client::{Client, ClientConfig};
 pub use conversations::{AttachmentView, ConversationView, MessageView, SafetyNumberView, SyncReport};
 pub use error::{ClientError, Result};

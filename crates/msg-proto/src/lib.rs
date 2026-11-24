@@ -27,6 +27,10 @@ pub const REQUEST_MAX_SKEW_SECS: i64 = 60;
 /// Taille maximale d'un blob (message MLS) accepté par le serveur.
 pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
 
+/// Taille maximale d'un blob de pièce jointe chiffrée (25 Mio de clair
+/// complétés au palier supérieur, plus nonce et étiquette AEAD).
+pub const MAX_ATTACHMENT_BLOB_BYTES: usize = 26 * 1024 * 1024;
+
 /// Nombre maximal de KeyPackages par envoi.
 pub const MAX_KEY_PACKAGES_PER_UPLOAD: usize = 100;
 
@@ -342,6 +346,11 @@ pub struct AckRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PushEvent {
     NewMessages,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentUploadResponse {
+    pub blob_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

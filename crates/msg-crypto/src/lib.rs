@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod app_message;
+pub mod attachment;
 pub mod identity;
 pub mod keywrap;
 pub mod mls;

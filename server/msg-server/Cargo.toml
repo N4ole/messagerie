@@ -44,3 +44,4 @@ msg-client-core.workspace = true
 reqwest.workspace = true
 tempfile = "3"
 url = "2"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

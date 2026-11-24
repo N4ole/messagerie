@@ -11,6 +11,7 @@ msg-proto.workspace = true
 msg-crypto.workspace = true
 msg-markdown.workspace = true
 msg-platform-win.workspace = true
+msg-media.workspace = true
 base64.workspace = true
 futures-util.workspace = true
 hex.workspace = true

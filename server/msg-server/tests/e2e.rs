@@ -415,3 +415,65 @@ async fn ephemeral_messages_and_key_rotation() {
     alice.send_text(&c.id, "toujours synchronisés").await.unwrap();
     assert_eq!(bob.sync().await.unwrap().new_messages, 1);
 }
+
+/// JPEG de test avec un segment EXIF contenant un marqueur « GPS ».
+fn jpeg_with_exif(marker: &[u8]) -> Vec<u8> {
+    use image::codecs::jpeg::JpegEncoder;
+    let img = image::RgbImage::from_fn(64, 48, |x, y| image::Rgb([x as u8, y as u8, 100]));
+    let mut plain = Vec::new();
+    JpegEncoder::new_with_quality(&mut plain, 90).encode_image(&img).unwrap();
+    let mut payload = b"Exif\0\0MM\0*\0\0\0\x08".to_vec();
+    payload.extend_from_slice(marker);
+    let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    out.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+    out.extend_from_slice(&payload);
+    out.extend_from_slice(&plain[2..]);
+    out
+}
+
+/// Pièces jointes : EXIF supprimé, nom/type/miniature invisibles du serveur,
+/// intégrité vérifiée au téléchargement.
+#[tokio::test(flavor = "multi_thread")]
+async fn attachments_are_cleaned_and_encrypted() {
+    let mut s = spawn().await;
+    let admin = s.admin().await;
+    let (mut alice, _, _) = s.user(&admin, "alice").await;
+    let (mut bob, _, _) = s.user(&admin, "bob").await;
+    let c = alice.start_conversation("bob").await.unwrap();
+
+    let gps = format!("GPS-{}", uuid::Uuid::new_v4().simple());
+    let file_name = format!("vacances-{}.jpeg", uuid::Uuid::new_v4().simple());
+    let photo = jpeg_with_exif(gps.as_bytes());
+    let sent = alice.send_file(&c.id, &file_name, photo, Some("la plage".into())).await.unwrap();
+    let a = sent.attachment.as_ref().unwrap();
+    assert_eq!((a.mime.as_str(), a.metadata_cleaned), ("image/jpeg", true));
+    assert!(a.name.ends_with(".jpg"));
+    assert!(a.thumbnail_data_uri.as_deref().unwrap().starts_with("data:image/jpeg;base64,"));
+
+    // Côté serveur : ni nom de fichier, ni type, ni marqueur, ni légende.
+    let dump = s.dump().await;
+    let stem = file_name.trim_end_matches(".jpeg");
+    for needle in [stem, gps.as_str(), "la plage", "image/jpeg"] {
+        assert!(!dump.contains(needle), "« {needle} » visible côté serveur");
+        assert!(!dump.contains(&hex::encode(needle)), "« {needle} » (hex) visible côté serveur");
+    }
+
+    bob.sync().await.unwrap();
+    let msgs = bob.messages(&c.id, 10).unwrap();
+    let m = &msgs[0];
+    assert_eq!((m.kind.as_str(), m.text.as_str()), ("attachment", "la plage"));
+    let file = bob.download_file(&m.id).await.unwrap();
+    assert_eq!(file.mime, "image/jpeg");
+    assert!(!file.data.windows(gps.len()).any(|w| w == gps.as_bytes()), "EXIF/GPS transmis au destinataire");
+    assert!(!file.data.windows(4).any(|w| w == b"Exif"));
+    image::load_from_memory(&file.data).expect("image valide");
+
+    // Fichier non image : transmis intact, signalé comme non nettoyé.
+    let pdf = b"%PDF-1.7\n% contenu de test\n".repeat(100);
+    let sent = alice.send_file(&c.id, "../../rapport.pdf", pdf.clone(), None).await.unwrap();
+    let a = sent.attachment.unwrap();
+    assert_eq!((a.name.as_str(), a.mime.as_str(), a.metadata_cleaned), ("rapport.pdf", "application/pdf", false));
+    bob.sync().await.unwrap();
+    let id = bob.messages(&c.id, 10).unwrap().last().unwrap().id.clone();
+    assert_eq!(&bob.download_file(&id).await.unwrap().data[..], &pdf[..]);
+}

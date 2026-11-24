@@ -57,6 +57,8 @@ pub struct AttachmentView {
     pub name: String,
     pub mime: String,
     pub size: u64,
+    /// Métadonnées supprimées à l'envoi (images ré-encodées uniquement).
+    pub metadata_cleaned: bool,
     /// Miniature locale (`data:image/jpeg;base64,…`), jamais distante.
     pub thumbnail_data_uri: Option<String>,
 }
@@ -288,6 +290,7 @@ impl Client {
         let ast = msg_markdown::parse(&m.body);
         let attachment = m.attachment.as_deref().and_then(|j| serde_json::from_str::<AttachmentRef>(j).ok()).map(|a| {
             AttachmentView {
+                metadata_cleaned: a.mime == "image/jpeg" || a.mime == "image/png",
                 name: a.name,
                 mime: a.mime,
                 size: a.size,

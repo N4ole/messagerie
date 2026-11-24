@@ -99,7 +99,13 @@ async fn verify_signed(st: &AppState, parts: &axum::http::request::Parts, body: 
 
 async fn buffer(req: Request) -> AppResult<(axum::http::request::Parts, axum::body::Bytes)> {
     let (parts, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, MAX_BODY_BYTES).await.map_err(|_| {
+    // Seul le téléversement de pièces jointes accepte un corps volumineux.
+    let limit = if parts.method == axum::http::Method::POST && parts.uri.path() == "/v1/attachments" {
+        msg_proto::MAX_ATTACHMENT_BLOB_BYTES
+    } else {
+        MAX_BODY_BYTES
+    };
+    let bytes = axum::body::to_bytes(body, limit).await.map_err(|_| {
         AppError::new(StatusCode::PAYLOAD_TOO_LARGE, ErrorCode::PayloadTooLarge, "requête trop volumineuse")
     })?;
     Ok((parts, bytes))
