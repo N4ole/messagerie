@@ -32,3 +32,11 @@ jobs:
       - uses: github/codeql-action/analyze@d2aacf54c2fbc910db8d7ec338fdb54ea48c692d # v3.39.4
         with:
           category: /language:${{ matrix.language }}
+          output: sarif-results
+      # Rapport SARIF conservé en artefact (lecture hors de l'interface GitHub).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: sarif-results
+          retention-days: 14
