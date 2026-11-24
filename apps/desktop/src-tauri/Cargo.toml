@@ -23,7 +23,7 @@ msg-platform-win.workspace = true
 msg-proto.workspace = true
 base64.workspace = true
 futures-util.workspace = true
-qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+qrcode = { version = "0.15", default-features = false, features = ["svg"] }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
