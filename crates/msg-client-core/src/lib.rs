@@ -8,11 +8,13 @@
 
 pub mod api;
 pub mod client;
+pub mod conversations;
 pub mod error;
 pub mod store;
 pub mod vault;
 
-pub use client::{Client, ClientConfig, ConversationView, MessageView, SyncReport};
+pub use client::{Client, ClientConfig};
+pub use conversations::{AttachmentView, ConversationView, MessageView, SafetyNumberView, SyncReport};
 pub use error::{ClientError, Result};
 
 pub(crate) fn now_secs() -> i64 {

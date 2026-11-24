@@ -274,14 +274,16 @@ fn base64_64(b: &[u8; 64]) -> String {
 }
 
 /// Après une réinitialisation par l'administrateur, l'identité de l'utilisateur
-/// change : ses contacts existants doivent rejeter la nouvelle identité.
+/// change : chez ses contacts, la conversation est suspendue (contenu masqué,
+/// envoi bloqué) jusqu'à vérification du numéro de sécurité ou acceptation.
 #[tokio::test(flavor = "multi_thread")]
-async fn identity_change_is_detected() {
+async fn identity_change_suspends_until_verified() {
     let mut s = spawn().await;
     let admin = s.admin().await;
     let (mut carol, _, _) = s.user(&admin, "carol").await;
     let (bob, _, _) = s.user(&admin, "bob").await;
     let old = carol.start_conversation("bob").await.unwrap();
+    let old_number = carol.safety_number("bob").unwrap().number;
     drop(bob);
 
     let r = admin.api().admin_reset("bob").await.unwrap();
@@ -290,14 +292,126 @@ async fn identity_change_is_detected() {
     // L'ancien appareil de Bob n'existe plus : l'envoi échoue.
     assert!(carol.send_text(&old.id, "test").await.is_err());
 
-    // La nouvelle identité de Bob tente d'ouvrir une conversation : Carol,
-    // qui connaît l'ancienne clé, rejette le Welcome.
-    bob2.start_conversation("carol").await.unwrap();
+    // La nouvelle identité de Bob ouvre une conversation et écrit.
+    let conv_b = bob2.start_conversation("carol").await.unwrap();
+    bob2.send_text(&conv_b.id, "c'est bien moi").await.unwrap();
     let report = carol.sync().await.unwrap();
-    assert_eq!(report.rejected, 1, "le Welcome de la nouvelle identité doit être rejeté");
-    assert_eq!(carol.conversations().unwrap().len(), 1, "aucune nouvelle conversation");
+    assert_eq!(report.identity_changes, vec!["bob".to_string()]);
+    assert_eq!(report.rejected, 0);
+    let suspended = carol.conversation(&conv_b.id).unwrap();
+    assert_eq!(suspended.status, "identity_changed");
+    assert_eq!(suspended.identity_changed, vec!["bob".to_string()]);
+    assert!(carol.messages(&conv_b.id, 10).unwrap().is_empty(), "contenu masqué");
+    assert!(carol.send_text(&conv_b.id, "non").await.is_err(), "envoi bloqué");
 
-    // Un utilisateur qui n'a jamais vu Bob accepte sa nouvelle identité (TOFU).
+    // Numéro de sécurité : calculé sur la NOUVELLE clé, différent de l'ancien.
+    let sn = carol.safety_number("bob").unwrap();
+    assert!(sn.identity_changed);
+    assert_ne!(sn.number, old_number);
+    let bob_view = bob2.safety_number("carol").unwrap();
+    assert_eq!(bob_view.number, sn.number, "les deux côtés voient le même numéro");
+    // Un mauvais QR code est refusé, le bon est accepté.
+    assert!(!carol.verify_safety_number("bob", Some(&old_number)).unwrap());
+    assert!(carol.verify_safety_number("bob", Some(&bob_view.qr_payload)).unwrap());
+    let ok = carol.conversation(&conv_b.id).unwrap();
+    assert_eq!(ok.status, "ok");
+    assert!(ok.verified);
+    assert_eq!(carol.messages(&conv_b.id, 10).unwrap()[0].text, "c'est bien moi");
+    carol.send_text(&conv_b.id, "vérifié").await.unwrap();
+    assert_eq!(bob2.sync().await.unwrap().new_messages, 1);
+}
+
+/// Groupes : création, ajout, retrait (le membre retiré ne lit plus rien),
+/// départ, commits réservés à l'administrateur.
+#[tokio::test(flavor = "multi_thread")]
+async fn group_lifecycle() {
+    let mut s = spawn().await;
+    let admin = s.admin().await;
+    let (mut alice, _, _) = s.user(&admin, "alice").await;
+    let (mut bob, _, _) = s.user(&admin, "bob").await;
+    let (mut carol, _, _) = s.user(&admin, "carol").await;
     let (mut dave, _, _) = s.user(&admin, "dave").await;
-    dave.start_conversation("bob").await.unwrap();
+
+    let g = alice.create_group("Équipe projet", &["bob".into(), "carol".into()]).await.unwrap();
+    assert_eq!((g.kind.as_str(), g.title.as_str(), g.is_admin), ("group", "Équipe projet", true));
+    assert_eq!(g.members, vec!["alice", "bob", "carol"]);
+    for c in [&mut bob, &mut carol] {
+        c.sync().await.unwrap();
+        let v = c.conversation(&g.id).unwrap();
+        assert_eq!(
+            (v.kind.as_str(), v.title.as_str(), v.admin.as_deref(), v.is_admin),
+            ("group", "Équipe projet", Some("alice"), false)
+        );
+    }
+    bob.send_text(&g.id, "bonjour à tous").await.unwrap();
+    assert_eq!(alice.sync().await.unwrap().new_messages, 1);
+    assert_eq!(carol.sync().await.unwrap().new_messages, 1);
+
+    // Seul l'administrateur gère les membres.
+    assert!(bob.add_member(&g.id, "dave").await.is_err());
+    let g2 = alice.add_member(&g.id, "dave").await.unwrap();
+    assert_eq!(g2.members.len(), 4);
+    for c in [&mut bob, &mut carol, &mut dave] {
+        c.sync().await.unwrap();
+    }
+    assert_eq!(dave.conversation(&g.id).unwrap().title, "Équipe projet");
+    dave.send_text(&g.id, "merci de l'invitation").await.unwrap();
+    assert_eq!(carol.sync().await.unwrap().new_messages, 1);
+
+    // Retrait de Bob : il est informé et ne peut plus rien lire.
+    alice.remove_member(&g.id, "bob").await.unwrap();
+    let r = bob.sync().await.unwrap();
+    assert_eq!(r.removed_from, vec![g.id.clone()]);
+    assert_eq!(bob.conversation(&g.id).unwrap().status, "removed");
+    assert!(bob.send_text(&g.id, "encore là ?").await.is_err());
+    carol.sync().await.unwrap();
+    dave.sync().await.unwrap();
+    alice.send_text(&g.id, "secret sans Bob").await.unwrap();
+    let r = bob.sync().await.unwrap();
+    assert_eq!(r.new_messages, 0, "un membre retiré ne reçoit plus rien");
+    assert_eq!(carol.sync().await.unwrap().new_messages, 1);
+
+    // Départ de Carol : proposition validée automatiquement par Alice.
+    carol.leave_group(&g.id).await.unwrap();
+    alice.sync().await.unwrap();
+    assert_eq!(alice.conversation(&g.id).unwrap().members, vec!["alice", "dave"]);
+    carol.sync().await.unwrap();
+    assert_eq!(carol.conversation(&g.id).unwrap().status, "removed");
+    dave.sync().await.unwrap();
+    alice.send_text(&g.id, "à deux").await.unwrap();
+    assert_eq!(dave.sync().await.unwrap().new_messages, 1);
+    assert!(alice.leave_group(&g.id).await.is_err(), "l'administrateur ne peut pas partir");
+}
+
+/// Messages éphémères et rotation des clés.
+#[tokio::test(flavor = "multi_thread")]
+async fn ephemeral_messages_and_key_rotation() {
+    let mut s = spawn().await;
+    let admin = s.admin().await;
+    let (mut alice, _, _) = s.user(&admin, "alice").await;
+    let (mut bob, _, _) = s.user(&admin, "bob").await;
+    let c = alice.start_conversation("bob").await.unwrap();
+    alice.set_ephemeral(&c.id, Some(1)).unwrap();
+    let m = alice.send_text(&c.id, "disparaît vite").await.unwrap();
+    assert!(m.expires_at_ms.is_some());
+    bob.sync().await.unwrap();
+    assert_eq!(bob.messages(&c.id, 10).unwrap().len(), 1);
+    assert!(bob.messages(&c.id, 10).unwrap()[0].expires_at_ms.is_some());
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    assert!(bob.messages(&c.id, 10).unwrap().is_empty(), "expiré chez le destinataire");
+    assert!(alice.messages(&c.id, 10).unwrap().is_empty(), "expiré chez l'expéditeur");
+    alice.set_ephemeral(&c.id, None).unwrap();
+
+    // Rotation forcée côté membre non administrateur : proposition → commit
+    // par l'administrateur → les deux restent synchronisés.
+    bob.rotate_now(&c.id).await.unwrap();
+    alice.sync().await.unwrap(); // reçoit la proposition, émet le commit
+    bob.sync().await.unwrap(); // applique le commit
+    alice.rotate_now(&c.id).await.unwrap(); // commit direct de l'administrateur
+    bob.sync().await.unwrap();
+    bob.send_text(&c.id, "après deux rotations").await.unwrap();
+    let r = alice.sync().await.unwrap();
+    assert_eq!((r.new_messages, r.rejected), (1, 0));
+    alice.send_text(&c.id, "toujours synchronisés").await.unwrap();
+    assert_eq!(bob.sync().await.unwrap().new_messages, 1);
 }

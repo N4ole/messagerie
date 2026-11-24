@@ -10,6 +10,7 @@ pub mod identity;
 pub mod keywrap;
 pub mod mls;
 pub mod request;
+pub mod safety;
 
 use zeroize::Zeroizing;
 
@@ -31,6 +32,8 @@ pub enum CryptoError {
     UnknownGroup,
     #[error("suite cryptographique non autorisée")]
     WrongCiphersuite,
+    #[error("commit refusé : émetteur non autorisé")]
+    CommitRejected,
 }
 
 pub type Result<T> = std::result::Result<T, CryptoError>;

@@ -116,10 +116,21 @@ pub enum Incoming {
     Joined { group_id: Vec<u8>, members: Vec<GroupMember> },
     /// Message applicatif déchiffré et dont la signature a été vérifiée.
     Application { group_id: Vec<u8>, sender: MemberIdentity, plaintext: Zeroizing<Vec<u8>> },
-    /// Commit appliqué : nouvelle époque.
-    Committed { group_id: Vec<u8>, members: Vec<GroupMember> },
-    /// Proposition mise en attente.
-    ProposalStored { group_id: Vec<u8> },
+    /// Commit appliqué : nouvelle époque. `removed_self` : nous avons été
+    /// retirés du groupe par ce commit.
+    Committed { group_id: Vec<u8>, sender: MemberIdentity, members: Vec<GroupMember>, removed_self: bool },
+    /// Proposition (mise à jour, départ…) mise en attente d'un commit.
+    ProposalStored { group_id: Vec<u8>, sender: MemberIdentity },
+}
+
+/// Résultat de l'ajout de membres à un groupe existant.
+#[derive(Debug)]
+pub struct AddedMembers {
+    /// Commit à diffuser aux membres déjà présents.
+    pub commit: Vec<u8>,
+    /// Welcome à distribuer aux nouveaux appareils.
+    pub welcome: Vec<u8>,
+    pub members: Vec<GroupMember>,
 }
 
 /// Groupe nouvellement créé.
@@ -294,8 +305,86 @@ impl MlsClient {
         Ok(commit)
     }
 
-    /// Traite un message reçu (Welcome, commit ou message applicatif).
+    /// Ajoute des appareils (KeyPackages validés) à un groupe existant.
+    pub fn add_members(&self, group_id: &[u8], key_packages: &[Vec<u8>]) -> Result<AddedMembers> {
+        if key_packages.is_empty() {
+            return Err(CryptoError::Mls("aucun appareil à ajouter".into()));
+        }
+        let kps = key_packages.iter().map(|b| self.validate_key_package(b)).collect::<Result<Vec<_>>>()?;
+        let mut group = self.load(group_id)?;
+        let (commit, welcome, _) = group.add_members(&self.provider, &self.signer, &kps).map_err(mls_err)?;
+        group.merge_pending_commit(&self.provider).map_err(mls_err)?;
+        Ok(AddedMembers {
+            commit: commit.tls_serialize_detached().map_err(mls_err)?,
+            welcome: welcome.tls_serialize_detached().map_err(mls_err)?,
+            members: members_of(&group)?,
+        })
+    }
+
+    /// Retire du groupe les appareils indiqués. Retourne le commit à diffuser
+    /// (y compris aux appareils retirés, pour qu'ils constatent leur retrait).
+    pub fn remove_devices(&self, group_id: &[u8], devices: &[Uuid]) -> Result<Vec<u8>> {
+        let mut group = self.load(group_id)?;
+        let mut leaves = Vec::new();
+        for m in group.members() {
+            if devices.contains(&MemberIdentity::from_credential(&m.credential)?.device_id) {
+                leaves.push(m.index);
+            }
+        }
+        if leaves.is_empty() {
+            return Err(CryptoError::Mls("aucun appareil correspondant dans le groupe".into()));
+        }
+        let (commit, _, _) = group.remove_members(&self.provider, &self.signer, &leaves).map_err(mls_err)?;
+        group.merge_pending_commit(&self.provider).map_err(mls_err)?;
+        commit.tls_serialize_detached().map_err(mls_err)
+    }
+
+    /// Propose une mise à jour de notre feuille (rotation de clés), à valider
+    /// par le committer du groupe.
+    pub fn propose_self_update(&self, group_id: &[u8]) -> Result<Vec<u8>> {
+        let mut group = self.load(group_id)?;
+        let (msg, _) =
+            group.propose_self_update(&self.provider, &self.signer, LeafNodeParameters::default()).map_err(mls_err)?;
+        msg.tls_serialize_detached().map_err(mls_err)
+    }
+
+    /// Propose notre départ du groupe (à valider par le committer).
+    pub fn propose_leave(&self, group_id: &[u8]) -> Result<Vec<u8>> {
+        let mut group = self.load(group_id)?;
+        let msg = group.leave_group(&self.provider, &self.signer).map_err(mls_err)?;
+        msg.tls_serialize_detached().map_err(mls_err)
+    }
+
+    /// Valide les propositions en attente par un commit (s'il y en a).
+    pub fn commit_pending(&self, group_id: &[u8]) -> Result<Option<Vec<u8>>> {
+        let mut group = self.load(group_id)?;
+        if group.pending_proposals().next().is_none() {
+            return Ok(None);
+        }
+        let (commit, _, _) = group.commit_to_pending_proposals(&self.provider, &self.signer).map_err(mls_err)?;
+        group.merge_pending_commit(&self.provider).map_err(mls_err)?;
+        Ok(Some(commit.tls_serialize_detached().map_err(mls_err)?))
+    }
+
+    /// Supprime l'état local d'un groupe (après départ ou retrait).
+    pub fn delete_group(&self, group_id: &[u8]) -> Result<()> {
+        let mut group = self.load(group_id)?;
+        group.delete(self.provider.storage()).map_err(mls_err)
+    }
+
+    /// Traite un message reçu en acceptant tout commit (voir [`MlsClient::process_with`]).
     pub fn process(&self, bytes: &[u8]) -> Result<Incoming> {
+        self.process_with(bytes, &|_, _| true)
+    }
+
+    /// Traite un message reçu (Welcome, commit, proposition ou message
+    /// applicatif). `commit_allowed(group_id, émetteur)` décide si un commit
+    /// peut être appliqué : il est rejeté **avant** toute modification d'état.
+    pub fn process_with(
+        &self,
+        bytes: &[u8],
+        commit_allowed: &dyn Fn(&[u8], &MemberIdentity) -> bool,
+    ) -> Result<Incoming> {
         let msg = MlsMessageIn::tls_deserialize_exact(bytes).map_err(mls_err)?;
         match msg.extract() {
             MlsMessageBodyIn::Welcome(welcome) => {
@@ -308,13 +397,17 @@ impl MlsClient {
                 }
                 Ok(Incoming::Joined { group_id: group.group_id().as_slice().to_vec(), members: members_of(&group)? })
             }
-            MlsMessageBodyIn::PrivateMessage(pm) => self.process_protocol(pm.into()),
-            MlsMessageBodyIn::PublicMessage(pm) => self.process_protocol(pm.into()),
+            MlsMessageBodyIn::PrivateMessage(pm) => self.process_protocol(pm.into(), commit_allowed),
+            MlsMessageBodyIn::PublicMessage(pm) => self.process_protocol(pm.into(), commit_allowed),
             _ => Err(CryptoError::Mls("type de message MLS inattendu".into())),
         }
     }
 
-    fn process_protocol(&self, pm: ProtocolMessage) -> Result<Incoming> {
+    fn process_protocol(
+        &self,
+        pm: ProtocolMessage,
+        commit_allowed: &dyn Fn(&[u8], &MemberIdentity) -> bool,
+    ) -> Result<Incoming> {
         let group_id = pm.group_id().as_slice().to_vec();
         let mut group = self.load(&group_id)?;
         let processed = group.process_message(&self.provider, pm).map_err(mls_err)?;
@@ -324,12 +417,17 @@ impl MlsClient {
                 Ok(Incoming::Application { group_id, sender, plaintext: Zeroizing::new(app.into_bytes()) })
             }
             ProcessedMessageContent::StagedCommitMessage(staged) => {
+                if !commit_allowed(&group_id, &sender) {
+                    return Err(CryptoError::CommitRejected);
+                }
+                let removed_self = staged.self_removed();
                 group.merge_staged_commit(&self.provider, *staged).map_err(mls_err)?;
-                Ok(Incoming::Committed { group_id, members: members_of(&group)? })
+                let members = if removed_self { Vec::new() } else { members_of(&group)? };
+                Ok(Incoming::Committed { group_id, sender, members, removed_self })
             }
             ProcessedMessageContent::ProposalMessage(p) => {
                 group.store_pending_proposal(self.provider.storage(), *p).map_err(mls_err)?;
-                Ok(Incoming::ProposalStored { group_id })
+                Ok(Incoming::ProposalStored { group_id, sender })
             }
             ProcessedMessageContent::ExternalJoinProposalMessage(_) => {
                 Err(CryptoError::Mls("adhésion externe non autorisée".into()))
@@ -499,5 +597,79 @@ mod tests {
         assert_eq!(m.identity, *bob.identity());
         assert_eq!(m.signature_key, bob.signature_public_key());
         assert!(alice.inspect_key_package(&kp[..kp.len() - 1]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    fn client(name: &str) -> MlsClient {
+        MlsClient::create(MemberIdentity { username: name.into(), device_id: Uuid::new_v4() }).unwrap()
+    }
+
+    fn join(c: &MlsClient, welcome: &[u8]) {
+        assert!(matches!(c.process(welcome).unwrap(), Incoming::Joined { .. }));
+    }
+
+    #[test]
+    fn group_add_remove_and_removed_member_locked_out() {
+        let (alice, bob, carol) = (client("alice"), client("bob"), client("carol"));
+        let g = alice.create_group(&[bob.generate_key_packages(1).unwrap().remove(0)]).unwrap();
+        join(&bob, &g.welcome);
+        // Ajout de Carol : commit pour Bob, Welcome pour Carol.
+        let add = alice.add_members(&g.group_id, &[carol.generate_key_packages(1).unwrap().remove(0)]).unwrap();
+        assert_eq!(add.members.len(), 3);
+        assert!(matches!(bob.process(&add.commit).unwrap(), Incoming::Committed { removed_self: false, .. }));
+        join(&carol, &add.welcome);
+        let m = carol.encrypt(&g.group_id, b"salut le groupe").unwrap();
+        assert!(matches!(alice.process(&m).unwrap(), Incoming::Application { .. }));
+        assert!(matches!(bob.process(&m).unwrap(), Incoming::Application { .. }));
+        // Retrait de Bob.
+        let rm = alice.remove_devices(&g.group_id, &[bob.identity().device_id]).unwrap();
+        match bob.process(&rm).unwrap() {
+            Incoming::Committed { removed_self, .. } => assert!(removed_self),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(carol.process(&rm).unwrap(), Incoming::Committed { removed_self: false, .. }));
+        // Nouvelle époque : Bob ne peut plus déchiffrer.
+        let secret = alice.encrypt(&g.group_id, b"apres retrait").unwrap();
+        assert!(bob.process(&secret).is_err());
+        assert!(matches!(carol.process(&secret).unwrap(), Incoming::Application { .. }));
+    }
+
+    #[test]
+    fn proposals_committed_by_admin_only() {
+        let (alice, bob) = (client("alice"), client("bob"));
+        let g = alice.create_group(&[bob.generate_key_packages(1).unwrap().remove(0)]).unwrap();
+        join(&bob, &g.welcome);
+        // Bob propose une rotation ; Alice (committer) la valide.
+        let prop = bob.propose_self_update(&g.group_id).unwrap();
+        assert!(matches!(alice.process(&prop).unwrap(), Incoming::ProposalStored { .. }));
+        let commit = alice.commit_pending(&g.group_id).unwrap().expect("commit");
+        assert!(alice.commit_pending(&g.group_id).unwrap().is_none());
+        assert!(matches!(bob.process(&commit).unwrap(), Incoming::Committed { .. }));
+        let m = bob.encrypt(&g.group_id, b"apres rotation").unwrap();
+        assert!(matches!(alice.process(&m).unwrap(), Incoming::Application { .. }));
+        // Un commit d'un membre non autorisé est rejeté sans modifier l'état.
+        let rogue = bob.self_update(&g.group_id).unwrap();
+        let only_alice = |_: &[u8], s: &MemberIdentity| s.username == "alice";
+        assert!(matches!(alice.process_with(&rogue, &only_alice), Err(CryptoError::CommitRejected)));
+        // Alice est restée à l'époque précédente : un message de Bob émis dans
+        // l'époque qu'il a créée seul est illisible pour elle.
+        let m = bob.encrypt(&g.group_id, b"epoque non reconnue").unwrap();
+        assert!(alice.process(&m).is_err());
+    }
+
+    #[test]
+    fn leave_via_proposal() {
+        let (alice, bob) = (client("alice"), client("bob"));
+        let g = alice.create_group(&[bob.generate_key_packages(1).unwrap().remove(0)]).unwrap();
+        join(&bob, &g.welcome);
+        let leave = bob.propose_leave(&g.group_id).unwrap();
+        assert!(matches!(alice.process(&leave).unwrap(), Incoming::ProposalStored { .. }));
+        let commit = alice.commit_pending(&g.group_id).unwrap().unwrap();
+        assert!(matches!(bob.process(&commit).unwrap(), Incoming::Committed { removed_self: true, .. }));
+        assert_eq!(alice.members(&g.group_id).unwrap().len(), 1);
     }
 }
