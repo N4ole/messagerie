@@ -8,9 +8,14 @@ import jsQR from "jsqr";
 export function QrScanner({ onResult }: { onResult: (payload: string) => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Disponibilité de la caméra connue dès le rendu : pas d'état à mettre à jour dans l'effet.
+  const supported = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+  const [error, setError] = useState<string | null>(
+    supported ? null : "Caméra indisponible : comparez les chiffres à la place.",
+  );
 
   useEffect(() => {
+    if (!supported) return;
     let stream: MediaStream | null = null;
     let frame = 0;
     let done = false;
@@ -35,10 +40,6 @@ export function QrScanner({ onResult }: { onResult: (payload: string) => void })
       }
       frame = requestAnimationFrame(tick);
     };
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError("Caméra indisponible : comparez les chiffres à la place.");
-      return;
-    }
     navigator.mediaDevices
       .getUserMedia({ video: { facingMode: "environment" }, audio: false })
       .then((s) => {
@@ -55,7 +56,7 @@ export function QrScanner({ onResult }: { onResult: (payload: string) => void })
       cancelAnimationFrame(frame);
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, [onResult]);
+  }, [onResult, supported]);
 
   return (
     <div className="qr-scanner">

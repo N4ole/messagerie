@@ -289,7 +289,7 @@ pub mod soft {
                 }
             };
             let cred_id = msg_crypto::random_bytes::<16>()?.to_vec();
-            let point = key.verifying_key().to_encoded_point(false);
+            let point = key.verifying_key().to_sec1_point(false);
             let cose = Cbor::Map(vec![
                 (Cbor::Integer(1.into()), Cbor::Integer(2.into())),
                 (Cbor::Integer(3.into()), Cbor::Integer((-7).into())),

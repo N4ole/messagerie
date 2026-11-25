@@ -440,7 +440,7 @@ dependencies = [
  "sha1 0.10.7",
  "sync_wrapper",
  "tokio",
- "tokio-tungstenite 0.29.0",
+ "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -1038,9 +1038,9 @@ checksum = "be95d4a884358a21a199689323c29e9256b4a1b315e22f183d155422041d3a9a"
 
 [[package]]
 name = "constant_time_eq"
-version = "0.3.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "cookie"
@@ -1425,9 +1425,11 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
  "curve25519-dalek-derive",
+ "digest 0.11.3",
  "fiat-crypto 0.3.0",
  "rustc_version",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1593,15 +1595,6 @@ dependencies = [
  "const-oid 0.10.3",
  "crypto-common 0.2.2",
  "ctutils",
-]
-
-[[package]]
-name = "dirs"
-version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
-dependencies = [
- "dirs-sys",
 ]
 
 [[package]]
@@ -1783,16 +1776,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "ed25519"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
+dependencies = [
+ "signature 3.0.0",
+]
+
+[[package]]
 name = "ed25519-dalek"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
 dependencies = [
  "curve25519-dalek 4.1.3",
- "ed25519",
+ "ed25519 2.2.3",
  "rand_core 0.6.4",
  "serde",
  "sha2 0.10.9",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "ed25519-dalek"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ebaa1a2bf1290ab3bfe5a7b771d050ebffab2711c19a81691c683a5144a25de"
+dependencies = [
+ "curve25519-dalek 5.0.0",
+ "ed25519 3.0.0",
+ "sha2 0.11.1",
  "subtle",
  "zeroize",
 ]
@@ -3880,7 +3895,7 @@ dependencies = [
 name = "messagerie-desktop"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "futures-util",
  "msg-client-core",
  "msg-platform-win",
@@ -3997,7 +4012,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "dirs 6.0.0",
+ "dirs",
  "msg-client-core",
  "msg-proto",
  "qrcode",
@@ -4010,7 +4025,7 @@ dependencies = [
 name = "msg-client-core"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "ciborium",
  "futures-util",
  "hex",
@@ -4019,16 +4034,16 @@ dependencies = [
  "msg-media",
  "msg-platform-win",
  "msg-proto",
- "p256 0.13.2",
+ "p256 0.14.0",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "tokio-tungstenite 0.26.2",
+ "tokio-tungstenite",
  "tracing",
  "url",
  "uuid",
@@ -4040,9 +4055,9 @@ name = "msg-crypto"
 version = "0.1.0"
 dependencies = [
  "argon2",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chacha20poly1305",
- "ed25519-dalek",
+ "ed25519-dalek 3.0.0",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "hex",
@@ -4053,7 +4068,7 @@ dependencies = [
  "openmls_traits",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "uuid",
  "zeroize",
@@ -4081,7 +4096,7 @@ name = "msg-platform-win"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
@@ -4089,7 +4104,7 @@ dependencies = [
 name = "msg-proto"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "serde",
  "serde_json",
  "uuid",
@@ -4103,13 +4118,13 @@ dependencies = [
  "anyhow",
  "argon2",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chacha20poly1305",
  "clap",
  "futures-util",
  "getrandom 0.3.4",
  "hex",
- "hkdf 0.12.4",
+ "hkdf 0.13.0",
  "image",
  "msg-client-core",
  "msg-crypto",
@@ -4117,7 +4132,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "sqlx",
  "subtle",
  "tempfile",
@@ -4542,7 +4557,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dbd3f0c3422e7c7a8496f042b547b0c28d0793f8ba97feb401966e58196a1e40"
 dependencies = [
- "ed25519-dalek",
+ "ed25519-dalek 2.2.0",
  "ml-dsa",
  "openmls_traits",
  "p256 0.13.2",
@@ -4597,7 +4612,7 @@ checksum = "36bf3fe824ead6e81d22f49a9cd7feffca3494979fac14c1248e19516e3625f1"
 dependencies = [
  "aes-gcm 0.10.3",
  "chacha20poly1305",
- "ed25519-dalek",
+ "ed25519-dalek 2.2.0",
  "hkdf 0.13.0",
  "hmac 0.13.0",
  "hpke-rs",
@@ -5318,9 +5333,9 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qrcode"
-version = "0.14.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+checksum = "ace1a365f55004297f2cf24acfd96d02966246ca423385273b58a7dc873ee14d"
 
 [[package]]
 name = "quick-error"
@@ -6942,7 +6957,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "cookie",
- "dirs 7.0.0",
+ "dirs",
  "dunce",
  "embed_plist",
  "getrandom 0.3.4",
@@ -6992,7 +7007,7 @@ checksum = "73d80784e874fa117b9b00a6680cf2f9b8a51bbd14406bea980cf8f328b00646"
 dependencies = [
  "anyhow",
  "cargo_toml",
- "dirs 7.0.0",
+ "dirs",
  "glob",
  "heck 0.5.0",
  "json-patch",
@@ -7243,7 +7258,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -7448,9 +7463,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
-version = "0.26.2"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a9daff607c6d2bf6c16fd681ccb7eecc83e4e2cdc1ca067ffaadfca5de7f084"
+checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
 dependencies = [
  "futures-util",
  "log",
@@ -7458,20 +7473,8 @@ dependencies = [
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
- "tungstenite 0.26.2",
+ "tungstenite",
  "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "tokio-tungstenite"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
-dependencies = [
- "futures-util",
- "log",
- "tokio",
- "tungstenite 0.29.0",
 ]
 
 [[package]]
@@ -7585,17 +7588,20 @@ checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "totp-rs"
-version = "5.7.2"
+version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50e69a15e21b2ff22c415446983978bded3244195f17d59cb113551c1e806f91"
+checksum = "49d0f9b7aa5def86d3a8d8ba926fe8c1990924dd715d2b5fc54a4aa3788c11c1"
 dependencies = [
  "base32",
  "constant_time_eq",
- "hmac 0.12.1",
- "sha1 0.10.7",
- "sha2 0.10.9",
+ "hmac 0.13.0",
+ "percent-encoding",
+ "rand 0.10.4",
+ "serde",
+ "sha1 0.11.0",
+ "sha2 0.11.1",
  "url",
- "urlencoding",
+ "zeroize",
 ]
 
 [[package]]
@@ -7726,7 +7732,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2b9c52859a94554803ccd4a24b98f74148ebc73b90676d783f3490b1bff9d72"
 dependencies = [
  "crossbeam-channel",
- "dirs 7.0.0",
+ "dirs",
  "libappindicator",
  "muda",
  "objc2",
@@ -7749,25 +7755,6 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tungstenite"
-version = "0.26.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4793cb5e56680ecbb1d843515b23b6de9a75eb04b66643e256a396d43be33c13"
-dependencies = [
- "bytes",
- "data-encoding",
- "http",
- "httparse",
- "log",
- "rand 0.9.5",
- "rustls",
- "rustls-pki-types",
- "sha1 0.10.7",
- "thiserror 2.0.21",
- "utf-8",
-]
-
-[[package]]
-name = "tungstenite"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c01152af293afb9c7c2a57e4b559c5620b421f6d133261c60dd2d0cdb38e6b8"
@@ -7778,6 +7765,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.5",
+ "rustls",
+ "rustls-pki-types",
  "sha1 0.10.7",
  "thiserror 2.0.21",
 ]
@@ -7884,12 +7873,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "urlencoding"
-version = "2.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
-
-[[package]]
 name = "urlpattern"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7900,12 +7883,6 @@ dependencies = [
  "serde",
  "url",
 ]
-
-[[package]]
-name = "utf-8"
-version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 
 [[package]]
 name = "utf8_iter"
@@ -8478,15 +8455,6 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
-dependencies = [
- "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-sys"
 version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
@@ -8695,7 +8663,7 @@ dependencies = [
  "block2",
  "cookie",
  "crossbeam-channel",
- "dirs 7.0.0",
+ "dirs",
  "dom_query 0.29.0",
  "dpi",
  "dunce",

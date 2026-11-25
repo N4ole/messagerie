@@ -92,7 +92,8 @@ async fn main() -> anyhow::Result<()> {
         let act = Client::activate(&cfg, &cli.user, &code, &pw).await?;
         // Le secret TOTP n'est jamais écrit en texte (historique du terminal,
         // enregistrements de session) : il est présenté uniquement en QR code.
-        let qr = qrcode::QrCode::new(act.otpauth_uri.as_bytes())?
+        let qr = qrcode::QrCode::new(act.otpauth_uri.as_bytes())
+            .map_err(|e| anyhow::anyhow!("QR code : {e}"))?
             .render::<qrcode::render::unicode::Dense1x2>()
             .quiet_zone(true)
             .build();

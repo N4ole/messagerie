@@ -11,7 +11,7 @@ use msg_proto::Role;
 use msg_server::{config::Config, router, AppState};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use totp_rs::{Algorithm, Secret, TOTP};
+use totp_rs::{Algorithm, Builder, Secret};
 
 /// Mot de passe des comptes de test, aléatoire à chaque exécution.
 pub fn password() -> &'static str {
@@ -92,10 +92,16 @@ async fn spawn_with(webauthn: bool) -> TestServer {
 }
 
 pub fn totp_code(base32: &str, offset_steps: i64) -> String {
-    let secret = Secret::Encoded(base32.into()).to_bytes().unwrap();
-    let t = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret, None, "x".into()).unwrap();
+    let secret = Secret::try_from_base32(base32).unwrap();
+    let t = Builder::new()
+        .with_algorithm(Algorithm::SHA1)
+        .with_digits(6)
+        .with_step_duration(30)
+        .with_secret(secret)
+        .build()
+        .unwrap();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-    t.generate((now + offset_steps * 30) as u64)
+    t.generate((now + offset_steps * 30) as u64).to_string()
 }
 
 impl TestServer {

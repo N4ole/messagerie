@@ -26,8 +26,20 @@ export function SettingsDialog({ session, onClose }: { session: Session; onClose
     setPasskeys(await backend.listPasskeys().catch(() => []));
   }, [backend]);
   useEffect(() => {
-    refresh().catch((e) => setError(errorMessage(e)));
-  }, [refresh]);
+    let active = true;
+    Promise.all([backend.securityStatus(), backend.listPasskeys().catch(() => [])])
+      .then(([s, p]) => {
+        if (!active) return;
+        setStatus(s);
+        setPasskeys(p);
+      })
+      .catch((e) => {
+        if (active) setError(errorMessage(e));
+      });
+    return () => {
+      active = false;
+    };
+  }, [backend]);
 
   async function changeLock(minutes: number) {
     try {

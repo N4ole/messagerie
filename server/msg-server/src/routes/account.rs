@@ -104,7 +104,10 @@ pub async fn activate(
     .await?;
     tx.commit().await?;
     let t = passwords::totp(&secret, &st.cfg().site_name, &req.username)?;
-    Ok(Json(ActivateResponse { totp_secret_base32: passwords::totp_base32(&secret), otpauth_uri: t.get_url() }))
+    Ok(Json(ActivateResponse {
+        totp_secret_base32: passwords::totp_base32(&secret),
+        otpauth_uri: t.to_url().map_err(|e| anyhow::anyhow!("TOTP : {e}"))?,
+    }))
 }
 
 /// Second facteur présenté avec le mot de passe.
