@@ -17,6 +17,7 @@
 
 - [Phase 1 — MVP](phases/phase-1.md)
 - [Phase 2 — Sécurité avancée](phases/phase-2.md)
+- [Phase 3 — Réseau et web](phases/phase-3.md)
 
 # Guides
 

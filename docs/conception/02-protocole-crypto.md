@@ -85,6 +85,10 @@ Liste exhaustive des endroits où nous assemblons des primitives :
 4. Chiffrement des pièces jointes (clé aléatoire + STREAM) et transport de la clé dans le message MLS.
 5. Calcul du safety number.
 6. Remplissage (padding) des messages par paliers.
+7. *(Phase 3)* Valeur publiée dans le journal Key Transparency : SHA-256 d'un encodage canonique (identité + certificats d'appareils).
+8. *(Phase 3)* Empreinte de liaison d'appareil : SHA-256 tronqué à 80 bits des clés publiques du nouvel appareil, comparée par l'appareil principal.
+9. *(Phase 3)* Instantané chiffré de la base web : XChaCha20-Poly1305, clé aléatoire enveloppée par Argon2id (mêmes primitives que le coffre desktop).
+10. *(Phase 3)* Ticket WebSocket à usage unique (256 bits, haché côté serveur, 30 s) et épinglage TLS par SHA-256 de la clé publique.
 
 ## 8 bis. Ordonnancement des commits (Phase 2)
 

@@ -57,6 +57,43 @@ pnpm tauri dev
 Dans l'application, saisir `http://127.0.0.1:8080` comme serveur (HTTP n'est
 accepté que sur la boucle locale ; HTTPS est obligatoire sinon).
 
+## Client web (WASM)
+
+Prérequis : cible `wasm32-unknown-unknown` (installée par `rust-toolchain.toml`)
+et `wasm-bindgen` **à la version du verrou** :
+
+```bash
+cargo install wasm-bindgen-cli --version 0.2.130 --locked
+```
+
+```bash
+pnpm build:web
+```
+
+Produit `ui/dist-web/` (module WASM + interface). Le serveur le sert à la
+racine si `MSG_WEB_DIR=ui/dist-web` : ouvrir alors `http://127.0.0.1:8080/`.
+
+Test d'interopérabilité desktop (client natif) ↔ web (Chromium) :
+
+```bash
+cargo build -p msg-server --bin msg-server --example interop_peer
+```
+
+```bash
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres pnpm test:interop
+```
+
+## Tor
+
+Le desktop embarque arti : choisir « Tor, mode strict » sur l'écran de
+connexion (premier amorçage : jusqu'à deux minutes). Amorçage réel en test :
+
+```bash
+cargo test -p msg-tor -- --ignored
+```
+
+Service onion du serveur : voir le [guide d'administration](administration.md#service-onion-tor).
+
 ## Construire le `.exe` Windows
 
 ```bash
@@ -85,7 +122,11 @@ et l'exécutable portable `target/release/messagerie.exe`.
 | `MSG_ATTACHMENT_QUOTA_BYTES` | `1073741824` | Volume de pièces jointes par appareil |
 | `MSG_WEBAUTHN_RP_ID` | — | Domaine WebAuthn (ex. `messagerie.exemple.org`) ; active les passkeys |
 | `MSG_WEBAUTHN_ORIGIN` | — | Origine publique exacte (ex. `https://messagerie.exemple.org`) |
+| `MSG_WEB_DIR` | — | Dossier du client web (`ui/dist-web`) ; servi à la racine, même origine que l'API |
+| `MSG_WEB_ONION_ONLY` | `0` | `1` : le client web refuse de fonctionner hors d'une adresse `.onion` |
 | `MSG_LOG` / `MSG_LOG_JSON` | `info` / `0` | Journalisation |
 
 > Perdre `MSG_SERVER_SECRET` rend tous les mots de passe et secrets TOTP
-> inutilisables (réinitialisation de tous les comptes nécessaire).
+> inutilisables (réinitialisation de tous les comptes nécessaire). Il dérive
+> aussi la clé VRF du journal Key Transparency : le changer rend le journal
+> existant impossible à rejouer (le serveur refuse alors de servir KT).

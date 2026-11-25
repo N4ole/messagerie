@@ -2,7 +2,7 @@
 
 Messagerie chiffrée de bout en bout, disponible en **application Windows (`.exe`)** et en **client web** interopérables, avec serveurs fédérés multi-sites.
 
-> **État : Phase 2 — Sécurité avancée livrée** (groupes, pièces jointes nettoyées, vérification par QR code, éphémères, anti-capture, verrouillage automatique, YubiKey/passkeys, TPM). Voir les rapports de [Phase 1](docs/phases/phase-1.md) et de [Phase 2](docs/phases/phase-2.md) et leurs **limites connues**. Aucun audit externe : ne pas utiliser pour des usages à haut risque.
+> **État : Phase 3 — Réseau et web livrée** (client web WASM interopérable avec le desktop, Key Transparency, appareils multiples et révocation, Tor embarqué en mode strict, épinglage TLS, service onion). Voir les rapports de [Phase 1](docs/phases/phase-1.md), [Phase 2](docs/phases/phase-2.md) et [Phase 3](docs/phases/phase-3.md) et leurs **limites connues**. Aucun audit externe : ne pas utiliser pour des usages à haut risque.
 
 ## Démarrage rapide
 
@@ -10,6 +10,7 @@ Messagerie chiffrée de bout en bout, disponible en **application Windows (`.exe
 pnpm install --frozen-lockfile && pnpm build:ui
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo test --workspace
 pnpm test
+pnpm build:web   # client web (nécessite wasm-bindgen-cli 0.2.130)
 ```
 
 - [Guide de développement](docs/guides/developpement.md) — build, tests, serveur local, `.exe`

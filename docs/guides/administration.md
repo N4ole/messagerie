@@ -75,3 +75,48 @@ nouveau code d'activation. Les correspondants de l'utilisateur **rejetteront**
 sa nouvelle identité : leurs conversations sont suspendues (contenu masqué,
 envoi bloqué) jusqu'à vérification du numéro de sécurité (QR code ou
 chiffres) ou acceptation explicite.
+
+## Appareils (Phase 3)
+
+- Un utilisateur lie un nouvel appareil (navigateur, second poste) depuis
+  l'écran de connexion (« Lier cet appareil ») ; il l'approuve depuis son
+  **appareil principal** (⚙ Sécurité → Appareils), en scannant le QR code ou
+  en saisissant le code affiché.
+- Révocation par l'utilisateur (⚙ Sécurité → Appareils → Révoquer) ou par
+  un administrateur :
+
+```bash
+msg-admin --server https://messagerie.exemple.org --user admin devices alice
+msg-admin --server https://messagerie.exemple.org --user admin revoke alice <device_id>
+```
+
+  L'appareil disparaît aussitôt de l'annuaire et du journal Key
+  Transparency ; il est retiré de chaque groupe par l'appareil principal de
+  l'administrateur du groupe à sa prochaine synchronisation, et efface ses
+  données locales s'il se reconnecte.
+- Appareil principal perdu : réinitialiser le compte (section suivante).
+
+## Service onion (Tor)
+
+Déploiement « Tor uniquement » (aucun port publié sur l'hôte, client web
+refusant toute adresse autre que `.onion`) :
+
+```bash
+MSG_SERVER_SECRET=$(openssl rand -hex 32) POSTGRES_PASSWORD=$(openssl rand -hex 16) docker compose -f deploy/docker/compose.onion.yaml up -d --build
+```
+
+```bash
+docker compose -f deploy/docker/compose.onion.yaml exec tor cat /var/lib/tor/messagerie/hostname
+```
+
+- Les clés du service (donc son adresse) sont dans le volume `onion` :
+  sauvegardez-le chiffré.
+- Clients desktop : URL `http://<adresse>.onion`, réseau « Tor, mode
+  strict ». Navigateur : Tor Browser sur la même adresse.
+- TLS au-dessus de Tor (facultatif, défense en profondeur) : certificat
+  auto-signé accepté par le desktop uniquement si l'empreinte SHA-256 de sa
+  clé publique est épinglée :
+
+```bash
+openssl x509 -in cert.pem -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum
+```
