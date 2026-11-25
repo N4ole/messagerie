@@ -83,6 +83,8 @@ pub enum ErrorCode {
     NotFound,
     Conflict,
     IdentityMismatch,
+    /// L'appareil a été révoqué : le client doit effacer ses données locales.
+    DeviceRevoked,
     PayloadTooLarge,
     RateLimited,
     Internal,
@@ -258,6 +260,100 @@ pub struct LoginRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Appareils : liaison et révocation
+// ---------------------------------------------------------------------------
+
+/// Nombre maximal d'appareils par compte.
+pub const MAX_DEVICES_PER_ACCOUNT: usize = 10;
+
+/// Clés publiques d'un appareil en attente de liaison (pas encore certifié).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingDevice {
+    pub device_id: Uuid,
+    #[serde(with = "b64")]
+    pub api_key: Vec<u8>,
+    #[serde(with = "b64")]
+    pub mls_signature_key: Vec<u8>,
+}
+
+/// Demande de liaison d'un nouvel appareil, authentifiée par le mot de passe
+/// et le second facteur. Elle ne donne aucun accès tant qu'un appareil
+/// détenteur de la clé d'identité ne l'a pas approuvée.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LinkStartRequest {
+    pub username: String,
+    pub password: String,
+    #[serde(default)]
+    pub totp_code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webauthn: Option<WebauthnAssertion>,
+    pub device: PendingDevice,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LinkStartResponse {
+    pub link_id: Uuid,
+    /// Secret à usage unique permettant au nouvel appareil de récupérer le
+    /// résultat (jamais affiché, jamais transmis à l'appareil approbateur).
+    pub poll_secret: String,
+    pub expires_at: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LinkPollRequest {
+    pub link_id: Uuid,
+    pub poll_secret: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Expired,
+}
+
+/// Résultat de la liaison. Une fois `approved`, la réponse contient le
+/// certificat signé par l'appareil approbateur et une session ; elle n'est
+/// délivrée qu'une seule fois.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LinkPollResponse {
+    pub status: LinkStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration: Option<DeviceRegistration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<SessionTokens>,
+}
+
+/// Demande de liaison telle que la voit l'appareil approbateur.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkRequestView {
+    pub link_id: Uuid,
+    pub device: PendingDevice,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+
+/// Approbation : certificat du nouvel appareil signé par la clé d'identité.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkApproveRequest {
+    pub cert_created_at: i64,
+    #[serde(with = "b64")]
+    pub cert_signature: Vec<u8>,
+}
+
+/// Appareil du compte courant (gestion des appareils).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OwnDevice {
+    pub device_id: Uuid,
+    pub created_at: i64,
+    /// Dernière activité, arrondie à l'heure.
+    pub last_seen_at: Option<i64>,
+    pub current: bool,
+}
+
+// ---------------------------------------------------------------------------
 // WebAuthn (passkeys, YubiKey)
 // ---------------------------------------------------------------------------
 
@@ -356,8 +452,56 @@ pub struct UserDirectoryEntry {
     pub username: String,
     #[serde(with = "b64")]
     pub identity_key: Vec<u8>,
+    /// Tous les appareils du compte. Lors d'une réclamation, `key_package`
+    /// n'est renseigné que pour les appareils demandés qui en ont un.
     pub devices: Vec<PublishedDevice>,
+    /// Preuve Key Transparency que cette entrée est celle publiée dans le
+    /// journal (absente sur un serveur antérieur à la Phase 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kt: Option<KtLookup>,
 }
+
+// ---------------------------------------------------------------------------
+// Key Transparency (akd)
+// ---------------------------------------------------------------------------
+
+/// État courant du journal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KtHead {
+    pub epoch: u64,
+    #[serde(with = "b64")]
+    pub root_hash: Vec<u8>,
+    /// Clé publique VRF du répertoire (mémorisée par le client au premier usage).
+    #[serde(with = "b64")]
+    pub vrf_public_key: Vec<u8>,
+}
+
+/// Preuve de recherche akd (encodage protobuf) pour une époque donnée.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KtLookup {
+    pub epoch: u64,
+    #[serde(with = "b64")]
+    pub root_hash: Vec<u8>,
+    #[serde(with = "b64")]
+    pub proof: Vec<u8>,
+}
+
+/// Preuve d'ajout seul (append-only) entre deux époques, avec les racines de
+/// chaque époque intermédiaire (`roots[0]` = racine de `from_epoch`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KtAudit {
+    pub from_epoch: u64,
+    pub to_epoch: u64,
+    pub roots: Vec<KtRoot>,
+    #[serde(with = "b64")]
+    pub proof: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KtRoot(#[serde(with = "b64")] pub Vec<u8>);
+
+/// Nombre maximal d'époques couvertes par une preuve d'audit.
+pub const KT_MAX_AUDIT_EPOCHS: u64 = 2000;
 
 // ---------------------------------------------------------------------------
 // Distribution des messages (delivery service)
@@ -398,6 +542,23 @@ pub struct AckRequest {
 }
 
 /// Notification poussée par WebSocket : ne contient jamais de contenu.
+/// Ticket d'ouverture du WebSocket pour le navigateur (qui ne peut pas
+/// signer les en-têtes d'une ouverture de WebSocket) : à usage unique,
+/// valable 30 secondes, obtenu par une requête signée.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct WsTicket {
+    pub ticket: String,
+    pub expires_at: i64,
+}
+
+/// Configuration publique du client web.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebConfig {
+    /// Mode Tor strict : le client web refuse de fonctionner hors d'une
+    /// adresse `.onion`.
+    pub onion_only: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PushEvent {

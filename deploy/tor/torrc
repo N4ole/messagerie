@@ -1,0 +1,13 @@
+# Service onion v3 du serveur de messagerie.
+# Aucun proxy client ni relais : ce démon ne fait qu'héberger le service.
+SocksPort 0
+ExitRelay 0
+# L'adresse .onion est dérivée de la clé conservée dans ce dossier :
+# sauvegardez-le (chiffré) pour garder la même adresse.
+HiddenServiceDir /var/lib/tor/messagerie/
+HiddenServiceVersion 3
+# Port virtuel 80 → serveur (réseau Docker interne, adresse fixe).
+HiddenServicePort 80 172.28.0.10:8080
+# Résistance au déni de service (preuve de travail, Tor ≥ 0.4.8).
+HiddenServicePoWDefensesEnabled 1
+Log notice stdout

@@ -13,6 +13,9 @@ pub async fn cleanup_once(st: &AppState) -> Result<(), sqlx::Error> {
     sqlx::query("DELETE FROM blobs WHERE expires_at < $1").bind(now).execute(db).await?;
     sqlx::query("DELETE FROM attachments WHERE expires_at < $1").bind(now).execute(db).await?;
     sqlx::query("DELETE FROM webauthn_challenges WHERE expires_at < $1").bind(now).execute(db).await?;
+    // Demandes de liaison expirées (une demande approuvée non récupérée
+    // laisse l'appareil enregistré ; il pourra être révoqué).
+    sqlx::query("DELETE FROM link_requests WHERE expires_at < $1").bind(now).execute(db).await?;
     sqlx::query("DELETE FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.blob_id = b.id)")
         .execute(db)
         .await?;
@@ -26,6 +29,10 @@ pub fn spawn(st: AppState) {
             tick.tick().await;
             if let Err(e) = cleanup_once(&st).await {
                 tracing::error!(error = %e, "purge périodique échouée");
+            }
+            // Publication Key Transparency de rattrapage (en cas d'échec antérieur).
+            if let Err(e) = crate::kt::flush(&st).await {
+                tracing::error!(error = %e.message, "publication Key Transparency échouée");
             }
         }
     });

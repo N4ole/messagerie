@@ -202,10 +202,18 @@ pub async fn reset(
     .fetch_optional(&mut *tx)
     .await?;
     let (id,) = row.ok_or_else(AppError::not_found)?;
-    sqlx::query("DELETE FROM devices WHERE account_id = $1").bind(id).execute(&mut *tx).await?;
+    // Tous les appareils sont révoqués (ils effaceront leurs données locales).
+    let ids: Vec<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM devices WHERE account_id = $1").bind(id).fetch_all(&mut *tx).await?;
+    for (d,) in ids {
+        super::devices::revoke(&mut tx, id, d).await?;
+    }
+    sqlx::query("DELETE FROM link_requests WHERE account_id = $1").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM webauthn_credentials WHERE account_id = $1").bind(id).execute(&mut *tx).await?;
+    crate::kt::mark_dirty(&mut *tx, id).await?;
     audit(&mut *tx, &ctx.username, "reset", &username).await?;
     tx.commit().await?;
+    super::devices::publish_now(&st).await;
     Ok(Json(ActivationCodeResponse { username, activation_code: code, expires_at: exp }))
 }
 
@@ -238,17 +246,14 @@ pub async fn revoke_device(
 ) -> AppResult<StatusCode> {
     ctx.require_admin()?;
     let mut tx = st.db().begin().await?;
-    let r = sqlx::query(
-        "DELETE FROM devices d USING accounts a WHERE d.account_id = a.id AND a.username = $1 AND d.id = $2",
-    )
-    .bind(&username)
-    .bind(device_id)
-    .execute(&mut *tx)
-    .await?;
-    if r.rows_affected() == 0 {
+    let acc: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM accounts WHERE username = $1").bind(&username).fetch_optional(&mut *tx).await?;
+    let (account_id,) = acc.ok_or_else(AppError::not_found)?;
+    if !super::devices::revoke(&mut tx, account_id, device_id).await? {
         return Err(AppError::not_found());
     }
     audit(&mut *tx, &ctx.username, "revoke_device", &format!("{username}/{device_id}")).await?;
     tx.commit().await?;
+    super::devices::publish_now(&st).await;
     Ok(StatusCode::NO_CONTENT)
 }

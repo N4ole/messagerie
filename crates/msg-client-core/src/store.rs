@@ -1,22 +1,34 @@
-//! Base locale chiffrée (SQLCipher).
+//! Base locale chiffrée : SQLCipher sur le desktop ; dans le navigateur,
+//! base en mémoire persistée chiffrée ([`crate::store_mem`]), de même
+//! interface.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Mutex, MutexGuard};
 
+#[cfg(not(target_arch = "wasm32"))]
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
 use zeroize::Zeroizing;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::error::{ClientError, Result};
+
+#[cfg(target_arch = "wasm32")]
+pub use crate::store_mem::MemStore as LocalStore;
 
 /// La connexion est protégée par un verrou pour que le client soit `Sync`
 /// (partage entre tâches asynchrones). Chaque opération est courte et
 /// synchrone : le verrou n'est jamais tenu pendant une attente réseau.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct LocalStore {
     conn: Mutex<Connection>,
 }
 
 /// Message stocké localement.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredMessage {
     pub id: String,
     pub group_id: Vec<u8>,
@@ -46,7 +58,7 @@ pub mod status {
     pub const LEFT: &str = "left";
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredConversation {
     pub group_id: Vec<u8>,
     /// `direct` ou `group`.
@@ -73,6 +85,7 @@ pub struct Contact {
     pub verified: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS contacts (
@@ -103,6 +116,7 @@ CREATE INDEX IF NOT EXISTS messages_group ON messages (group_id, received_at_ms)
 "#;
 
 /// Phase 2 : groupes, changement de clé, éphémères, pièces jointes, rotation.
+#[cfg(not(target_arch = "wasm32"))]
 const SCHEMA_V2: &str = r#"
 ALTER TABLE contacts ADD COLUMN pending_identity_key BLOB;
 ALTER TABLE contacts ADD COLUMN verified_at_ms INTEGER;
@@ -119,15 +133,19 @@ ALTER TABLE messages ADD COLUMN expires_at_ms INTEGER;
 CREATE INDEX IF NOT EXISTS messages_expiry ON messages (expires_at_ms) WHERE expires_at_ms IS NOT NULL;
 "#;
 
+#[cfg(not(target_arch = "wasm32"))]
 const SCHEMA_VERSION: i64 = 2;
 
+#[cfg(not(target_arch = "wasm32"))]
 const CONV_COLUMNS: &str = "c.group_id, c.kind, c.peer, c.name, c.admin, c.status, c.created_at_ms, c.last_activity_ms,
     (SELECT COUNT(*) FROM messages m WHERE m.group_id = c.group_id AND m.unread = 1),
     c.ttl_s, c.last_rotation_ms, c.sent_since_rotation";
 
+#[cfg(not(target_arch = "wasm32"))]
 const MSG_COLUMNS: &str =
     "id, group_id, sender, sender_device, kind, body, attachment, sent_at_ms, received_at_ms, outgoing, expires_at_ms";
 
+#[cfg(not(target_arch = "wasm32"))]
 impl LocalStore {
     /// Ouvre (ou crée) la base avec une clé brute de 256 bits, puis applique
     /// les migrations de schéma.
@@ -257,9 +275,12 @@ impl LocalStore {
         Ok(())
     }
 
+    /// Informations annoncées par l'administrateur. Un nom vide (conversation
+    /// directe) ne fixe que l'administrateur.
     pub fn set_group_info(&self, group_id: &[u8], name: &str, admin: &str) -> Result<()> {
         self.c().execute(
-            "UPDATE conversations SET kind = 'group', name = ?2, admin = ?3 WHERE group_id = ?1",
+            "UPDATE conversations SET kind = CASE WHEN ?2 = '' THEN kind ELSE 'group' END,
+                    name = CASE WHEN ?2 = '' THEN name ELSE ?2 END, admin = ?3 WHERE group_id = ?1",
             params![group_id, name, admin],
         )?;
         Ok(())
@@ -443,7 +464,7 @@ impl LocalStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

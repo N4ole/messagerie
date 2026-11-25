@@ -1,0 +1,13 @@
+{
+  "name": "@messagerie/interop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Test d'interopérabilité desktop (client natif) ↔ web (WASM dans Chromium).",
+  "scripts": {
+    "interop": "node --test interop.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

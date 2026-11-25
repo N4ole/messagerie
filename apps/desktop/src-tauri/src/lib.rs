@@ -15,8 +15,11 @@ use msg_client_core::api::WsMessage;
 use msg_client_core::passkey::{
     GetAssertionRequest, GetAssertionResponse, MakeCredentialRequest, MakeCredentialResponse, RawAuthenticator,
 };
-use msg_client_core::{Client, ClientConfig, ClientError, ConversationView, MessageView, SafetyNumberView, SyncReport};
-use msg_proto::WebauthnCredentialSummary;
+use msg_client_core::{
+    Client, ClientConfig, ClientError, ConversationView, LinkOutcome, LinkRequestInfo, MessageView, PendingLink,
+    SafetyNumberView, SyncReport,
+};
+use msg_proto::{OwnDevice, WebauthnCredentialSummary};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -37,6 +40,12 @@ struct AppState {
     /// Handle natif de la fenêtre principale (boîtes de dialogue WebAuthn).
     hwnd: AtomicIsize,
     capture_protection: std::sync::Mutex<String>,
+    /// Liaison de cet appareil en attente d'approbation.
+    pending_link: Mutex<Option<(Arc<PendingLink>, ClientConfig)>>,
+    /// Itinéraire réseau choisi et empreintes TLS épinglées.
+    network: Mutex<(msg_client_core::net::Network, Vec<[u8; 32]>)>,
+    /// Tor embarqué (démarré à la demande, conservé ensuite).
+    tor: Mutex<Option<msg_tor::TorRuntime>>,
 }
 
 impl Default for AppState {
@@ -48,6 +57,9 @@ impl Default for AppState {
             auto_lock_minutes: AtomicU32::new(DEFAULT_AUTO_LOCK_MIN),
             hwnd: AtomicIsize::new(0),
             capture_protection: std::sync::Mutex::new("indisponible".into()),
+            pending_link: Mutex::new(None),
+            network: Mutex::new((msg_client_core::net::Network::Direct, Vec::new())),
+            tor: Mutex::new(None),
         }
     }
 }
@@ -67,7 +79,12 @@ struct CmdError {
 
 impl From<ClientError> for CmdError {
     fn from(e: ClientError) -> Self {
+        if e.is_device_revoked() {
+            return CmdError { kind: "device_revoked", message: e.to_string() };
+        }
         let kind = match &e {
+            ClientError::KeyTransparency(_) => "key_transparency",
+            ClientError::NotPrimaryDevice => "not_primary_device",
             ClientError::TotpRequired => "totp_required",
             ClientError::WrongPassword => "wrong_password",
             ClientError::IdentityChanged(_) => "identity_changed",
@@ -98,6 +115,7 @@ struct SessionDto {
     fingerprint: String,
     vault_protection: String,
     capture_protection: String,
+    primary: bool,
 }
 
 #[derive(Serialize)]
@@ -124,7 +142,53 @@ struct SecurityStatus {
 
 fn config(app: &AppHandle, server: &str) -> CmdResult<ClientConfig> {
     let dir = app.path().app_data_dir().map_err(|e| err("error", format!("dossier de données : {e}")))?;
-    Ok(ClientConfig::new(server.trim().trim_end_matches('/'), dir))
+    let mut cfg = ClientConfig::new(server.trim().trim_end_matches('/'), dir);
+    let state = app.state::<AppState>();
+    let (network, pins) = state.network.try_lock().map(|g| g.clone()).map_err(|_| err("error", "réseau occupé"))?;
+    cfg.network = network;
+    cfg.tls_pins = pins;
+    Ok(cfg)
+}
+
+/// Choisit l'itinéraire réseau avant toute connexion : `direct` ou `tor`
+/// (mode strict : arti embarqué, aucune connexion directe). `pins` :
+/// empreintes SHA-256 (hexadécimal) de la clé publique TLS du serveur.
+#[tauri::command]
+async fn configure_network(
+    mode: String,
+    pins: Vec<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let pins = pins
+        .iter()
+        .map(|p| {
+            let clean: String = p.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+            hex::decode(&clean)
+                .ok()
+                .and_then(|v| <[u8; 32]>::try_from(v).ok())
+                .ok_or_else(|| err("error", "empreinte TLS invalide (SHA-256 en hexadécimal, 64 caractères)"))
+        })
+        .collect::<CmdResult<Vec<_>>>()?;
+    let (network, label) = match mode.as_str() {
+        "direct" => (msg_client_core::net::Network::Direct, "connexion directe".to_string()),
+        "tor" => {
+            let mut tor = state.tor.lock().await;
+            if tor.is_none() {
+                let base = app.path().app_data_dir().map_err(|e| err("error", e.to_string()))?.join("tor");
+                let rt = msg_tor::TorRuntime::start(&base.join("state"), &base.join("cache"))
+                    .await
+                    .map_err(|e| err("tor_unavailable", format!("{e}. Aucune connexion directe n'a été tentée.")))?;
+                *tor = Some(rt);
+            }
+            let p = tor.as_ref().map(|t| t.proxy()).ok_or_else(|| err("tor_unavailable", "Tor indisponible"))?;
+            let proxy = msg_client_core::net::TorProxy { addr: p.addr, username: p.username, password: p.password };
+            (msg_client_core::net::Network::TorStrict(proxy), "Tor (mode strict)".to_string())
+        }
+        _ => return Err(err("error", "mode réseau inconnu")),
+    };
+    *state.network.lock().await = (network, pins);
+    Ok(label)
 }
 
 async fn current(state: &State<'_, AppState>) -> CmdResult<Shared> {
@@ -228,6 +292,7 @@ async fn start_session(app: AppHandle, state: &State<'_, AppState>, client: Clie
         fingerprint: client.identity_fingerprint(),
         vault_protection: client.vault_protection(&cfg),
         capture_protection: state.capture_protection.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        primary: client.is_primary(),
     };
     let shared: Shared = Arc::new(Mutex::new(client));
     stop_listener(state);
@@ -485,6 +550,105 @@ async fn accept_identity_change(username: String, state: State<'_, AppState>) ->
 
 // --- Passkeys ----------------------------------------------------------------
 
+// --- Appareils : liaison et révocation -----------------------------------
+
+#[derive(Serialize)]
+struct LinkStartDto {
+    code: String,
+    fingerprint: String,
+    qr_data_uri: String,
+    expires_at: i64,
+}
+
+#[derive(Serialize)]
+struct LinkPollDto {
+    status: &'static str,
+    session: Option<SessionDto>,
+}
+
+/// Lie cet appareil à un compte existant : affiche un code à faire
+/// approuver par l'appareil principal.
+#[tauri::command]
+async fn link_start(
+    server: String,
+    username: String,
+    password: String,
+    totp: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<LinkStartDto> {
+    let cfg = config(&app, &server)?;
+    let p = Client::link_start(&cfg, &username, &password, &totp).await?;
+    let dto = LinkStartDto {
+        qr_data_uri: qr_data_uri(&p.code())?,
+        code: p.code(),
+        fingerprint: p.fingerprint(),
+        expires_at: p.expires_at,
+    };
+    *state.pending_link.lock().await = Some((Arc::new(p), cfg));
+    Ok(dto)
+}
+
+#[tauri::command]
+async fn link_poll(app: AppHandle, state: State<'_, AppState>) -> CmdResult<LinkPollDto> {
+    let (p, cfg) = state.pending_link.lock().await.clone().ok_or_else(|| err("error", "aucune liaison en cours"))?;
+    let outcome = p.poll().await?;
+    let done = |status| LinkPollDto { status, session: None };
+    Ok(match outcome {
+        LinkOutcome::Pending => done("pending"),
+        LinkOutcome::Rejected => {
+            state.pending_link.lock().await.take();
+            done("rejected")
+        }
+        LinkOutcome::Expired => {
+            state.pending_link.lock().await.take();
+            done("expired")
+        }
+        LinkOutcome::Linked(c) => {
+            state.pending_link.lock().await.take();
+            let s = start_session(app, &state, *c, cfg).await;
+            LinkPollDto { status: "linked", session: Some(s) }
+        }
+    })
+}
+
+#[tauri::command]
+async fn devices(state: State<'_, AppState>) -> CmdResult<Vec<OwnDevice>> {
+    let client = current(&state).await?;
+    let d = client.lock().await.devices().await?;
+    Ok(d)
+}
+
+#[tauri::command]
+async fn revoke_device(device_id: String, state: State<'_, AppState>) -> CmdResult<()> {
+    let id = uuid::Uuid::parse_str(&device_id).map_err(|_| err("error", "identifiant invalide"))?;
+    let client = current(&state).await?;
+    client.lock().await.revoke_device(id).await?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn link_requests(state: State<'_, AppState>) -> CmdResult<Vec<LinkRequestInfo>> {
+    let client = current(&state).await?;
+    let r = client.lock().await.link_requests().await?;
+    Ok(r)
+}
+
+#[tauri::command]
+async fn approve_link(code: String, state: State<'_, AppState>) -> CmdResult<()> {
+    let client = current(&state).await?;
+    client.lock().await.approve_link(&code).await?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn reject_link(link_id: String, state: State<'_, AppState>) -> CmdResult<()> {
+    let id = uuid::Uuid::parse_str(&link_id).map_err(|_| err("error", "identifiant invalide"))?;
+    let client = current(&state).await?;
+    client.lock().await.reject_link(id).await?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn register_passkey(name: String, state: State<'_, AppState>) -> CmdResult<WebauthnCredentialSummary> {
     let auth = authenticator(&state);
@@ -507,7 +671,9 @@ fn window_focused(app: &AppHandle) -> bool {
     app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false)
 }
 
-async fn sync_and_emit(app: &AppHandle, client: &Shared) {
+/// Synchronise et notifie l'interface ; renvoie `false` si l'appareil a été
+/// révoqué (données locales effacées, écoute arrêtée).
+async fn sync_and_emit(app: &AppHandle, client: &Shared) -> bool {
     let r = client.lock().await.sync().await;
     match r {
         Ok(report) => {
@@ -515,12 +681,34 @@ async fn sync_and_emit(app: &AppHandle, client: &Shared) {
                 // Notification sans aperçu : ni expéditeur, ni contenu.
                 let _ = app.notification().builder().title("Messagerie").body("Nouveau message").show();
             }
-            if report.processed > 0 || report.expired > 0 {
+            if report.processed > 0 || report.expired > 0 || report.reconciled > 0 {
                 let _ = app.emit("messages-updated", report);
             }
+            true
         }
-        Err(e) => tracing::warn!(error = %e, "synchronisation échouée"),
+        Err(e) if e.is_device_revoked() => {
+            handle_revoked(app).await;
+            false
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "synchronisation échouée");
+            true
+        }
     }
+}
+
+/// Appareil révoqué : clés libérées, compte local effacé, interface prévenue.
+async fn handle_revoked(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let taken = state.client.lock().await.take();
+    if let Some((shared, cfg)) = taken {
+        let username = shared.lock().await.username().to_owned();
+        drop(shared);
+        if let Err(e) = Client::wipe_local(&cfg, &username) {
+            tracing::error!(error = %e, "effacement du compte local");
+        }
+    }
+    let _ = app.emit("revoked", ());
 }
 
 /// Écoute le WebSocket de notification (sans contenu) et synchronise à chaque
@@ -533,17 +721,26 @@ async fn listen(app: AppHandle, client: Shared) {
         match ws {
             Ok(mut ws) => {
                 backoff = 1;
-                sync_and_emit(&app, &client).await;
+                if !sync_and_emit(&app, &client).await {
+                    return;
+                }
                 loop {
-                    tokio::select! {
+                    let alive = tokio::select! {
                         msg = ws.next() => match msg {
                             Some(Ok(WsMessage::Text(_))) => sync_and_emit(&app, &client).await,
                             Some(Ok(WsMessage::Close(_))) | Some(Err(_)) | None => break,
-                            Some(Ok(_)) => {}
+                            Some(Ok(_)) => true,
                         },
                         _ = tokio::time::sleep(Duration::from_secs(30)) => sync_and_emit(&app, &client).await,
+                    };
+                    if !alive {
+                        return;
                     }
                 }
+            }
+            Err(e) if e.is_device_revoked() => {
+                handle_revoked(&app).await;
+                return;
             }
             Err(e) => tracing::warn!(error = %e, "WebSocket indisponible"),
         }
@@ -634,6 +831,14 @@ pub fn run() {
             safety_number,
             verify_safety_number,
             accept_identity_change,
+            configure_network,
+            link_start,
+            link_poll,
+            devices,
+            revoke_device,
+            link_requests,
+            approve_link,
+            reject_link,
             register_passkey,
             list_passkeys,
             delete_passkey

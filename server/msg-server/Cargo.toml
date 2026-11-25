@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 msg-proto.workspace = true
 msg-crypto.workspace = true
+msg-kt = { workspace = true, features = ["server"] }
 anyhow.workspace = true
 argon2.workspace = true
 axum = { version = "0.8", features = ["ws", "macros"] }
@@ -32,6 +33,7 @@ sha2.workspace = true
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "uuid", "migrate", "macros"] }
 subtle.workspace = true
 thiserror.workspace = true
+tower-http = { version = "0.6", features = ["fs"] }
 tokio.workspace = true
 totp-rs.workspace = true
 tracing.workspace = true
@@ -43,6 +45,8 @@ webauthn-rs = { version = "0.6.2", features = ["danger-allow-state-serialisation
 
 [dev-dependencies]
 msg-client-core = { workspace = true, features = ["soft-authenticator"] }
+msg-tor.workspace = true
+async-trait = "0.1"
 reqwest.workspace = true
 tempfile = "3"
 url = "2"

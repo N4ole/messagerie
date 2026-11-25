@@ -1,6 +1,10 @@
 import type {
   Activation,
   Conversation,
+  Device,
+  LinkPoll,
+  LinkRequest,
+  LinkStart,
   Message,
   Passkey,
   SafetyNumber,
@@ -11,9 +15,18 @@ import type {
 
 /**
  * Interface entre l'UI et le cœur cryptographique. Desktop : commandes Tauri
- * (les clés restent dans le processus Rust). Web (Phase 3) : module WASM.
+ * (les clés restent dans le processus Rust). Web : le même cœur Rust compilé
+ * en WebAssembly (les clés restent dans la mémoire du module).
  */
 export interface Backend {
+  readonly platform: "desktop" | "web";
+  /**
+   * Itinéraire réseau, à choisir avant toute connexion : `direct` ou `tor`
+   * (mode strict : Tor embarqué, aucune connexion directe en cas d'échec).
+   * `pins` : empreintes SHA-256 de la clé publique TLS du serveur.
+   * Renvoie une description de l'itinéraire actif.
+   */
+  configureNetwork(mode: "direct" | "tor", pins: string[]): Promise<string>;
   activate(server: string, username: string, code: string, password: string): Promise<Activation>;
   enroll(server: string, username: string, password: string, totp: string): Promise<Session>;
   login(server: string, username: string, password: string, totp: string | null): Promise<Session>;
@@ -46,6 +59,16 @@ export interface Backend {
   verifySafetyNumber(username: string, scanned: string | null): Promise<boolean>;
   acceptIdentityChange(username: string): Promise<void>;
 
+  /** Liaison de cet appareil à un compte existant (approuvée par l'appareil principal). */
+  linkStart(server: string, username: string, password: string, totp: string): Promise<LinkStart>;
+  linkPoll(): Promise<LinkPoll>;
+  devices(): Promise<Device[]>;
+  revokeDevice(deviceId: string): Promise<void>;
+  linkRequests(): Promise<LinkRequest[]>;
+  /** Approuve un nouvel appareil à partir du code (ou QR code) qu'il affiche. */
+  approveLink(code: string): Promise<void>;
+  rejectLink(linkId: string): Promise<void>;
+
   registerPasskey(name: string): Promise<Passkey>;
   listPasskeys(): Promise<Passkey[]>;
   deletePasskey(id: number): Promise<void>;
@@ -54,4 +77,6 @@ export interface Backend {
   onUpdate(cb: (r: SyncReport) => void): Promise<() => void>;
   /** Verrouillage automatique déclenché par le cœur. */
   onLocked(cb: () => void): Promise<() => void>;
+  /** Cet appareil a été révoqué : ses données locales ont été effacées. */
+  onRevoked(cb: () => void): Promise<() => void>;
 }

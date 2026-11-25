@@ -12,10 +12,12 @@ use msg_proto::{
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use crate::account;
 use crate::api::{validate_server_url, ApiClient, DeviceAuth};
 use crate::error::{ClientError, Result};
 use crate::store::LocalStore;
-use crate::vault::{self, AccountPaths};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::vault::AccountPaths;
 
 /// Seuil de réapprovisionnement des KeyPackages et taille du lot.
 const KEY_PACKAGE_LOW_WATER: i64 = 10;
@@ -25,15 +27,21 @@ pub(crate) mod meta {
     pub const USERNAME: &str = "username";
     pub const DEVICE_ID: &str = "device_id";
     pub const IDENTITY_SECRET: &str = "identity_secret";
+    /// Clé d'identité publique (seule présente sur un appareil secondaire).
+    pub const IDENTITY_PUBLIC: &str = "identity_public";
     pub const API_SECRET: &str = "api_secret";
     pub const MLS_PUBLIC: &str = "mls_public";
     pub const MLS_STATE: &str = "mls_state";
     pub const CERT_CREATED_AT: &str = "cert_created_at";
     pub const CERT_SIGNATURE: &str = "cert_signature";
     pub const SESSION: &str = "session";
+    /// Key Transparency : clé VRF mémorisée au premier usage, dernière
+    /// époque et racine vérifiées.
+    pub const KT_VRF: &str = "kt_vrf";
+    pub const KT_STATE: &str = "kt_state";
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClientConfig {
     pub server_url: String,
     /// Dossier de données de l'application (contient `accounts/…`).
@@ -42,6 +50,21 @@ pub struct ClientConfig {
     pub argon2: Argon2Params,
     /// Autorise HTTP hors boucle locale (tests uniquement).
     pub allow_insecure_http: bool,
+    /// Desktop : itinéraire réseau (direct, ou Tor en mode strict).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub network: crate::net::Network,
+    /// Desktop : empreintes SHA-256 épinglées de la clé publique du serveur.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub tls_pins: Vec<[u8; 32]>,
+    /// Navigateur : stockage clé-valeur de l'hôte (IndexedDB).
+    #[cfg(target_arch = "wasm32")]
+    pub kv: Option<std::rc::Rc<dyn crate::account::KvStore>>,
+}
+
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfig").field("server_url", &self.server_url).finish_non_exhaustive()
+    }
 }
 
 impl ClientConfig {
@@ -51,14 +74,30 @@ impl ClientConfig {
             data_dir: data_dir.into(),
             argon2: Argon2Params::PRODUCTION,
             allow_insecure_http: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            network: crate::net::Network::Direct,
+            #[cfg(not(target_arch = "wasm32"))]
+            tls_pins: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            kv: None,
         }
     }
 
-    fn api(&self) -> Result<ApiClient> {
-        ApiClient::new(validate_server_url(&self.server_url, self.allow_insecure_http)?)
+    /// Client HTTP selon cette configuration (outillage de test).
+    pub fn api_for_tests(&self) -> Result<ApiClient> {
+        self.api()
     }
 
-    fn paths(&self, username: &str) -> AccountPaths {
+    pub(crate) fn api(&self) -> Result<ApiClient> {
+        let url = validate_server_url(&self.server_url, self.allow_insecure_http)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        return ApiClient::with_network(url, self.network.clone(), &self.tls_pins);
+        #[cfg(target_arch = "wasm32")]
+        ApiClient::new(url)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn paths(&self, username: &str) -> AccountPaths {
         AccountPaths::new(&self.data_dir, self.server_url.trim_end_matches('/'), username)
     }
 }
@@ -73,9 +112,16 @@ pub struct Client {
     pub(crate) api: ApiClient,
     pub(crate) store: LocalStore,
     pub(crate) mls: MlsClient,
-    pub(crate) identity: SigningKeyPair,
+    /// Clé d'identité publique de l'utilisateur.
+    pub(crate) identity_public: [u8; 32],
+    /// Clé d'identité privée : présente uniquement sur l'appareil principal
+    /// (celui qui a créé l'identité). Elle ne quitte jamais cet appareil ;
+    /// les appareils liés reçoivent seulement un certificat signé.
+    pub(crate) identity_secret: Option<SigningKeyPair>,
     pub(crate) username: String,
     pub(crate) device_id: Uuid,
+    /// Date (ms) de la dernière réconciliation des membres des groupes.
+    pub(crate) last_reconcile_ms: i64,
 }
 
 pub(crate) fn get_meta(store: &LocalStore, k: &str) -> Result<Zeroizing<Vec<u8>>> {
@@ -107,8 +153,7 @@ impl Client {
     /// enregistre sur le serveur, puis crée la base locale chiffrée.
     pub async fn enroll(cfg: &ClientConfig, username: &str, password: &str, totp_code: &str) -> Result<Self> {
         validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
-        let paths = cfg.paths(username);
-        if paths.exists() {
+        if account::exists(cfg, username) {
             return Err(ClientError::LocalAccountExists);
         }
         let identity = SigningKeyPair::generate()?;
@@ -142,8 +187,7 @@ impl Client {
             })
             .await?;
         // Le serveur a accepté : création du coffre et de la base locale.
-        let key = vault::create(&paths, password, cfg.argon2)?;
-        let mut store = LocalStore::open(&paths.db, &key)?;
+        let mut store = account::create(cfg, username, password)?;
         store.transaction(|s| {
             s.set_meta(meta::USERNAME, username.as_bytes())?;
             s.set_meta(meta::DEVICE_ID, device_id.as_bytes())?;
@@ -156,9 +200,20 @@ impl Client {
             Ok(())
         })?;
         api.set_device(DeviceAuth { device_id, api_key });
-        let client = Self { api, store, mls, identity, username: username.into(), device_id };
+        let client = Self {
+            api,
+            store,
+            mls,
+            identity_public: identity.public_bytes(),
+            identity_secret: Some(identity),
+            username: username.into(),
+            device_id,
+            last_reconcile_ms: 0,
+        };
+        client.store.set_meta(meta::IDENTITY_PUBLIC, &client.identity_public)?;
         client.save_session(&tokens)?;
         client.ensure_key_packages().await?;
+        client.kt_check_self().await?;
         Ok(client)
     }
 
@@ -197,30 +252,32 @@ impl Client {
             }
         }
         client.ensure_key_packages().await?;
+        // Le journal Key Transparency doit publier notre propre clé.
+        client.kt_check_self().await?;
         Ok(client)
     }
 
     /// Déverrouille le compte local (coffre + base) sans contacter le serveur.
     pub(crate) fn open_local(cfg: &ClientConfig, username: &str, password: &str) -> Result<Self> {
         validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
-        let paths = cfg.paths(username);
-        if !paths.exists() {
-            return Err(ClientError::NoLocalAccount);
-        }
-        let key = vault::open(&paths, password)?;
-        let store = LocalStore::open(&paths.db, &key)?;
-        // Renforcement opportuniste (TPM apparu depuis la création du coffre).
-        if let Err(e) = vault::harden(&paths, &key, password, cfg.argon2) {
-            tracing::warn!(error = %e, "renforcement TPM du coffre impossible");
-        }
-        drop(key);
+        let store = account::open(cfg, username, password)?;
         let stored_name = get_meta(&store, meta::USERNAME)?;
         if stored_name.as_slice() != username.as_bytes() {
             return Err(ClientError::Storage("compte local incohérent".into()));
         }
         let device_id =
             Uuid::from_slice(&get_meta(&store, meta::DEVICE_ID)?).map_err(|e| ClientError::Storage(e.to_string()))?;
-        let identity = SigningKeyPair::from_secret_bytes(&get_meta(&store, meta::IDENTITY_SECRET)?)?;
+        let identity_secret = match store.get_meta(meta::IDENTITY_SECRET)? {
+            Some(sk) => Some(SigningKeyPair::from_secret_bytes(&sk)?),
+            None => None,
+        };
+        let identity_public: [u8; 32] = match &identity_secret {
+            Some(k) => k.public_bytes(),
+            None => get_meta(&store, meta::IDENTITY_PUBLIC)?
+                .as_slice()
+                .try_into()
+                .map_err(|_| ClientError::Storage("clé d'identité publique".into()))?,
+        };
         let api_key = SigningKeyPair::from_secret_bytes(&get_meta(&store, meta::API_SECRET)?)?;
         let mls = MlsClient::restore(
             MemberIdentity { username: username.into(), device_id },
@@ -229,7 +286,16 @@ impl Client {
         )?;
         let mut api = cfg.api()?;
         api.set_device(DeviceAuth { device_id, api_key });
-        Ok(Self { api, store, mls, identity, username: username.into(), device_id })
+        Ok(Self {
+            api,
+            store,
+            mls,
+            identity_public,
+            identity_secret,
+            username: username.into(),
+            device_id,
+            last_reconcile_ms: 0,
+        })
     }
 
     pub(crate) fn registration(&self) -> Result<DeviceRegistration> {
@@ -240,7 +306,7 @@ impl Client {
         let api_pub = SigningKeyPair::from_secret_bytes(&get_meta(&self.store, meta::API_SECRET)?)?.public_bytes();
         Ok(DeviceRegistration {
             device_id: self.device_id,
-            identity_key: self.identity.public_bytes().to_vec(),
+            identity_key: self.identity_public.to_vec(),
             api_key: api_pub.to_vec(),
             mls_signature_key: self.mls.signature_public_key(),
             cert_created_at: i64::from_be_bytes(ts),
@@ -299,11 +365,17 @@ impl Client {
 
     /// Protection du coffre local (`none`, `dpapi`, `tpm+dpapi`…).
     pub fn vault_protection(&self, cfg: &ClientConfig) -> String {
-        vault::protection(&cfg.paths(&self.username)).unwrap_or_else(|_| "inconnue".into())
+        account::protection(cfg, &self.username)
     }
 
     pub fn identity_fingerprint(&self) -> String {
-        fingerprint(&self.identity.public_bytes())
+        fingerprint(&self.identity_public)
+    }
+
+    /// Appareil principal : détient la clé d'identité, approuve les nouveaux
+    /// appareils et, s'il administre un groupe, en émet les commits.
+    pub fn is_primary(&self) -> bool {
+        self.identity_secret.is_some()
     }
 
     pub fn api(&self) -> &ApiClient {

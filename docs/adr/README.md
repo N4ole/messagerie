@@ -16,3 +16,5 @@ Format : contexte → décision → conséquences. Les ADR 0001-0009 ont été a
 | [0010](0010-api-json.md) | API en JSON versionné plutôt qu'en Protobuf | Acceptée (Phase 1) |
 | [0011](0011-fournisseur-crypto-rustcrypto.md) | Fournisseur RustCrypto et suite ML-KEM-768 + X25519 | Acceptée (Phase 1) |
 | [0012](0012-committer-unique.md) | Un seul membre émet les commits MLS d'un groupe | Acceptée (Phase 2) |
+| [0013](0013-appareils-multiples.md) | Appareils multiples : liaison sans transfert de clé, révocation, réconciliation | Acceptée (Phase 3) |
+| [0014](0014-client-web.md) | Client web : même cœur Rust en WASM, stockage chiffré dans IndexedDB | Acceptée (Phase 3) |

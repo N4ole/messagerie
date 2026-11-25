@@ -14,13 +14,17 @@ use uuid::Uuid;
 
 use crate::error::{ClientError, Result};
 
-/// Vérifie l'URL du serveur : HTTPS obligatoire, sauf boucle locale (développement).
+/// Vérifie l'URL du serveur : HTTPS obligatoire, sauf boucle locale
+/// (développement) et service onion (Tor chiffre et authentifie déjà la
+/// connexion de bout en bout ; une adresse `.onion` n'est joignable que par
+/// Tor).
 pub fn validate_server_url(raw: &str, allow_insecure: bool) -> Result<Url> {
     let url = Url::parse(raw.trim()).map_err(|e| ClientError::InsecureUrl(e.to_string()))?;
     let loopback = matches!(url.host_str(), Some("localhost") | Some("127.0.0.1") | Some("[::1]") | Some("::1"));
+    let onion = url.host_str().is_some_and(|h| h.ends_with(".onion"));
     match url.scheme() {
         "https" => {}
-        "http" if loopback || allow_insecure => {}
+        "http" if loopback || onion || allow_insecure => {}
         _ => return Err(ClientError::InsecureUrl("HTTPS obligatoire (HTTP accepté uniquement en local)".into())),
     }
     if url.username() != "" || url.password().is_some() || url.query().is_some() {
@@ -30,6 +34,7 @@ pub fn validate_server_url(raw: &str, allow_insecure: bool) -> Result<Url> {
 }
 
 /// Message WebSocket (réexporté pour les applications).
+#[cfg(not(target_arch = "wasm32"))]
 pub use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 pub struct DeviceAuth {
@@ -40,6 +45,10 @@ pub struct DeviceAuth {
 pub struct ApiClient {
     http: reqwest::Client,
     base: Url,
+    #[cfg(not(target_arch = "wasm32"))]
+    network: crate::net::Network,
+    #[cfg(not(target_arch = "wasm32"))]
+    tls: Option<std::sync::Arc<rustls::ClientConfig>>,
     device: Option<DeviceAuth>,
     tokens: Mutex<Option<SessionTokens>>,
 }
@@ -62,13 +71,45 @@ async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
 }
 
 impl ApiClient {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(base: Url) -> Result<Self> {
-        let http = reqwest::Client::builder()
+        Self::with_network(base, crate::net::Network::Direct, &[])
+    }
+
+    /// Client HTTP avec itinéraire réseau et épinglage TLS. En mode Tor, le
+    /// proxy local d'arti est le **seul** itinéraire (proxys système
+    /// ignorés, noms résolus par Tor) : aucune connexion directe possible.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_network(base: Url, network: crate::net::Network, pins: &[[u8; 32]]) -> Result<Self> {
+        let mut b = reqwest::Client::builder()
             .user_agent("messagerie")
             .timeout(std::time::Duration::from_secs(120))
             .redirect(reqwest::redirect::Policy::none())
             .https_only(base.scheme() == "https")
-            .build()?;
+            .no_proxy();
+        if let crate::net::Network::TorStrict(p) = &network {
+            // Identifiants SOCKS (RFC 1929) dans l'URL du proxy ; `socks5h` :
+            // résolution des noms par Tor, aucune requête DNS locale.
+            let mut url =
+                Url::parse(&format!("socks5h://{}", p.addr)).map_err(|e| ClientError::Invalid(e.to_string()))?;
+            url.set_username(&p.username).map_err(|_| ClientError::Invalid("proxy".into()))?;
+            url.set_password(Some(&p.password)).map_err(|_| ClientError::Invalid("proxy".into()))?;
+            let proxy = reqwest::Proxy::all(url.as_str()).map_err(|e| ClientError::Invalid(e.to_string()))?;
+            b = b.proxy(proxy);
+        }
+        let tls = crate::net::pinned_tls(pins)?.map(std::sync::Arc::new);
+        if let Some(cfg) = &tls {
+            b = b.use_preconfigured_tls((**cfg).clone());
+        }
+        let http = b.build()?;
+        Ok(Self { http, base, network, tls, device: None, tokens: Mutex::new(None) })
+    }
+
+    /// Navigateur : `fetch` (TLS, délais et politique de redirection sont
+    /// ceux du navigateur ; la page est servie par le même site).
+    #[cfg(target_arch = "wasm32")]
+    pub fn new(base: Url) -> Result<Self> {
+        let http = reqwest::Client::builder().build()?;
         Ok(Self { http, base, device: None, tokens: Mutex::new(None) })
     }
 
@@ -270,6 +311,58 @@ impl ApiClient {
         self.call::<(), _>(Method::POST, &format!("/v1/users/{username}/claim"), None).await
     }
 
+    /// Réclame des KeyPackages pour certains appareils seulement.
+    pub async fn claim_devices(&self, username: &str, devices: &[Uuid]) -> Result<UserDirectoryEntry> {
+        validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
+        let list = devices.iter().map(Uuid::to_string).collect::<Vec<_>>().join(",");
+        self.call::<(), _>(Method::POST, &format!("/v1/users/{username}/claim?devices={list}"), None).await
+    }
+
+    // --- Key Transparency ---------------------------------------------------
+
+    pub async fn kt_head(&self) -> Result<KtHead> {
+        self.call::<(), _>(Method::GET, "/v1/kt/head", None).await
+    }
+
+    pub async fn kt_audit(&self, from: u64, to: u64) -> Result<KtAudit> {
+        self.call::<(), _>(Method::GET, &format!("/v1/kt/audit?from={from}&to={to}"), None).await
+    }
+
+    // --- Appareils ------------------------------------------------------------
+
+    pub async fn link_start(&self, req: &LinkStartRequest) -> Result<LinkStartResponse> {
+        self.public(Method::POST, "/v1/auth/link/start", Some(req)).await
+    }
+
+    pub async fn link_poll(&self, req: &LinkPollRequest) -> Result<LinkPollResponse> {
+        self.public(Method::POST, "/v1/auth/link/poll", Some(req)).await
+    }
+
+    /// Ticket d'ouverture du WebSocket (client web).
+    pub async fn ws_ticket(&self) -> Result<WsTicket> {
+        self.call::<(), _>(Method::POST, "/v1/ws/ticket", None).await
+    }
+
+    pub async fn devices(&self) -> Result<Vec<OwnDevice>> {
+        self.call::<(), _>(Method::GET, "/v1/devices", None).await
+    }
+
+    pub async fn revoke_device(&self, device: Uuid) -> Result<()> {
+        self.call::<(), ()>(Method::DELETE, &format!("/v1/devices/{device}"), None).await
+    }
+
+    pub async fn link_requests(&self) -> Result<Vec<LinkRequestView>> {
+        self.call::<(), _>(Method::GET, "/v1/devices/links", None).await
+    }
+
+    pub async fn link_approve(&self, link_id: Uuid, req: &LinkApproveRequest) -> Result<()> {
+        self.call(Method::POST, &format!("/v1/devices/links/{link_id}/approve"), Some(req)).await
+    }
+
+    pub async fn link_reject(&self, link_id: Uuid) -> Result<()> {
+        self.call::<(), ()>(Method::DELETE, &format!("/v1/devices/links/{link_id}"), None).await
+    }
+
     pub async fn send(&self, req: &SendRequest) -> Result<SendResponse> {
         self.call(Method::POST, "/v1/messages", Some(req)).await
     }
@@ -342,6 +435,7 @@ impl ApiClient {
     }
 
     /// Ouvre le WebSocket de notification (requête d'ouverture signée).
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn connect_ws(
         &self,
     ) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>> {
@@ -363,7 +457,19 @@ impl ApiClient {
         hm.insert(headers::NONCE, hv(h.nonce)?);
         hm.insert(headers::SIGNATURE, hv(h.signature)?);
         hm.insert("authorization", hv(format!("Bearer {}", t.access_token))?);
-        let (ws, _) = tokio_tungstenite::connect_async(req).await.map_err(|e| ClientError::Network(e.to_string()))?;
+        let connector = self.tls.clone().map(tokio_tungstenite::Connector::Rustls);
+        let (ws, _) = match &self.network {
+            crate::net::Network::Direct => {
+                tokio_tungstenite::connect_async_tls_with_config(req, None, false, connector).await
+            }
+            crate::net::Network::TorStrict(p) => {
+                let host = url.host_str().ok_or_else(|| ClientError::Invalid("hôte".into()))?;
+                let port = url.port_or_known_default().ok_or_else(|| ClientError::Invalid("port".into()))?;
+                let stream = crate::net::socks_connect(p, host, port).await?;
+                tokio_tungstenite::client_async_tls_with_config(req, stream, None, connector).await
+            }
+        }
+        .map_err(|e| ClientError::Network(e.to_string()))?;
         Ok(ws)
     }
 }
@@ -378,6 +484,9 @@ mod tests {
         assert!(validate_server_url("http://127.0.0.1:8080", false).is_ok());
         assert!(validate_server_url("http://localhost:8080", false).is_ok());
         assert!(validate_server_url("http://msg.example.org", false).is_err());
+        let onion = "http://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvw.onion";
+        assert!(validate_server_url(onion, false).is_ok(), "service onion sans TLS");
+        assert!(validate_server_url("http://exemple.onion.example.org", false).is_err());
         assert!(validate_server_url("http://msg.example.org", true).is_ok());
         assert!(validate_server_url("https://user:pw@msg.example.org", false).is_err());
         assert!(validate_server_url("ftp://msg.example.org", false).is_err());

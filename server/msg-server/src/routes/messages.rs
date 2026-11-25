@@ -36,9 +36,12 @@ pub async fn send(
         return Err(AppError::bad_request("destinataires invalides"));
     }
     let mut tx = st.db().begin().await?;
-    let (known,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM devices WHERE id = ANY($1)").bind(&recipients).fetch_one(&mut *tx).await?;
-    if known != recipients.len() as i64 {
+    // Les appareils révoqués (encore membres d'un groupe jusqu'au commit de
+    // retrait) sont ignorés : leur révocation ne doit pas bloquer les envois.
+    let known: Vec<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM devices WHERE id = ANY($1)").bind(&recipients).fetch_all(&mut *tx).await?;
+    let recipients: Vec<Uuid> = known.into_iter().map(|(d,)| d).collect();
+    if recipients.is_empty() {
         return Err(AppError::bad_request("appareil destinataire inconnu"));
     }
     let blob: Option<(i64,)> = sqlx::query_as(

@@ -37,3 +37,15 @@ même poste) et deux comptes créés par `msg-admin`.
 | 21 | Groupe à 3 : ajout, retrait (le membre retiré ne reçoit plus rien), départ | ☐ | ☐ |
 | 22 | Vérification par QR code entre deux postes équipés de webcam | ☐ | ☐ |
 | 23 | Message éphémère de 30 s : disparaît chez les deux correspondants | ☐ | ☐ |
+
+## Phase 3
+
+| # | Vérification | Résultat | Remarques |
+|---|---|---|---|
+| 24 | Réseau « Tor, mode strict » : connexion réussie (premier amorçage < 2 min) ; ⚙ indique Tor | ☐ | ☐ |
+| 25 | Tor bloqué (pare-feu sortant) en mode strict : erreur « Aucune connexion directe n'a été tentée » ; aucune connexion vers le serveur dans le moniteur de ressources | ☐ | ☐ |
+| 26 | Serveur en service onion (`compose.onion.yaml`) : connexion du desktop en `http://….onion` | ☐ | ☐ |
+| 27 | Empreinte TLS épinglée erronée : connexion refusée ; correcte : connexion acceptée | ☐ | ☐ |
+| 28 | Liaison d'un navigateur (client web) : code/QR, empreinte identique sur les deux appareils, approbation, conversations existantes visibles | ☐ | ☐ |
+| 29 | Révocation du navigateur depuis le desktop : le navigateur est déconnecté et ses données effacées | ☐ | ☐ |
+| 30 | Desktop lié comme second appareil d'un compte créé sur un autre poste | ☐ | ☐ |

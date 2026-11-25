@@ -1,0 +1,25 @@
+[package]
+name = "msg-kt"
+description = "Key Transparency : répertoire akd (serveur) et vérification des preuves (client, natif et WASM)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Répertoire et production des preuves (serveur uniquement).
+server = []
+
+[dependencies]
+akd = { version = "0.13", default-features = false, features = ["experimental", "public_auditing"] }
+async-trait = "0.1"
+msg-proto.workspace = true
+protobuf = "3"
+sha2.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+getrandom.workspace = true
+tokio = { workspace = true }
+uuid.workspace = true

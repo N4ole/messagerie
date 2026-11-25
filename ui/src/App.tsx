@@ -14,18 +14,41 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    const unlisten: (() => void)[] = [];
     let active = true;
+    const keep = (u: () => void) => (active ? unlisten.push(u) : u());
     backend
       .onLocked(() => {
         setSession(null);
         setNotice("Session verrouillée après inactivité. Saisissez votre mot de passe pour continuer.");
       })
-      .then((u) => (active ? (unlisten = u) : u()))
+      .then(keep)
+      .catch(() => undefined);
+    backend
+      .onRevoked(() => {
+        setSession(null);
+        setNotice("Cet appareil a été révoqué depuis un autre appareil : ses données locales ont été effacées.");
+      })
+      .then(keep)
       .catch(() => undefined);
     return () => {
       active = false;
-      unlisten?.();
+      unlisten.forEach((u) => u());
+    };
+  }, [backend]);
+
+  // Client web : contenu flouté quand la page n'est pas au premier plan
+  // (mesure dissuasive ; l'anti-capture est impossible dans un navigateur).
+  useEffect(() => {
+    if (backend.platform !== "web") return;
+    const update = () => document.body.classList.toggle("veiled", document.hidden || !document.hasFocus());
+    const events = ["visibilitychange", "blur", "focus"] as const;
+    events.forEach((e) => window.addEventListener(e, update));
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, update));
+      document.removeEventListener("visibilitychange", update);
+      document.body.classList.remove("veiled");
     };
   }, [backend]);
 

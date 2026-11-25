@@ -4,7 +4,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import globals from "globals";
 
 export default tseslint.config(
-  { ignores: ["dist"] },
+  { ignores: ["dist", "dist-web", "src/wasm-pkg"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -25,6 +25,10 @@ pub struct Inner {
     pub hub: broadcast::Sender<Uuid>,
     /// Vérificateur WebAuthn (absent si non configuré).
     pub webauthn: Option<Webauthn>,
+    /// Répertoire Key Transparency, chargé à la première utilisation.
+    pub kt: tokio::sync::Mutex<Option<msg_kt::KtDirectory>>,
+    /// Tickets WebSocket du client web (haché → contexte, expiration).
+    pub ws_tickets: Mutex<HashMap<Vec<u8>, (crate::auth::AuthContext, i64)>>,
     send_rate: Mutex<HashMap<Uuid, (i64, u32)>>,
 }
 
@@ -48,7 +52,18 @@ impl AppState {
             }
             None => None,
         };
-        Ok(Self { inner: Arc::new(Inner { db, cfg, secrets, hub, webauthn, send_rate: Mutex::new(HashMap::new()) }) })
+        Ok(Self {
+            inner: Arc::new(Inner {
+                db,
+                cfg,
+                secrets,
+                hub,
+                webauthn,
+                kt: tokio::sync::Mutex::new(None),
+                ws_tickets: Mutex::new(HashMap::new()),
+                send_rate: Mutex::new(HashMap::new()),
+            }),
+        })
     }
 
     pub fn db(&self) -> &PgPool {

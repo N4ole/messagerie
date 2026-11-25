@@ -1,6 +1,6 @@
 [package]
 name = "msg-client-core"
-description = "Logique client : API signée, base locale chiffrée (SQLCipher), conversations MLS."
+description = "Logique client : API signée, base locale chiffrée, conversations MLS, appareils, Key Transparency (natif et WASM)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,29 +10,40 @@ publish.workspace = true
 msg-proto.workspace = true
 msg-crypto.workspace = true
 msg-markdown.workspace = true
-msg-platform-win.workspace = true
 msg-media.workspace = true
+msg-kt.workspace = true
 base64.workspace = true
 futures-util.workspace = true
 hex.workspace = true
-reqwest.workspace = true
-rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
-tokio-tungstenite.workspace = true
 tracing.workspace = true
 url = "2"
 uuid.workspace = true
 zeroize.workspace = true
 p256 = { version = "0.14", features = ["ecdsa"], optional = true }
-ciborium = { version = "0.2", optional = true }
+ciborium = "0.2"
 sha2 = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+msg-platform-win.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+x509-cert = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Navigateur : fetch via reqwest (sans TLS natif : c'est le navigateur qui le gère).
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+js-sys = "0.3"
 
 [features]
 # Authentificateur FIDO2 logiciel, pour les tests uniquement.
-soft-authenticator = ["dep:p256", "dep:ciborium", "dep:sha2"]
+soft-authenticator = ["dep:p256", "dep:sha2"]
 
 [dev-dependencies]
 p256 = { version = "0.14", features = ["ecdsa"] }
