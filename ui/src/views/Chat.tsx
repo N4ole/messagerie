@@ -56,7 +56,9 @@ export function Chat({ session, onLogout }: { session: Session; onLogout: () => 
   const endRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const currentRef = useRef<string | null>(null);
-  currentRef.current = current;
+  useEffect(() => {
+    currentRef.current = current;
+  }, [current]);
 
   const refreshList = useCallback(async () => {
     setConversations(await backend.conversations());
@@ -108,10 +110,25 @@ export function Chat({ session, onLogout }: { session: Session; onLogout: () => 
     };
   }, [backend, refreshList, refreshMessages]);
 
+  // Changement de conversation : une réponse arrivée après un nouveau changement est ignorée.
   useEffect(() => {
-    if (current) refreshMessages(current).then(refreshList).catch((e) => setError(errorMessage(e)));
-    else setMessages([]);
-  }, [current, refreshMessages, refreshList]);
+    if (!current) return;
+    let active = true;
+    backend
+      .messages(current)
+      .then(async (list) => {
+        if (!active) return;
+        setMessages(list);
+        await backend.markRead(current);
+        await refreshList();
+      })
+      .catch((e) => {
+        if (active) setError(errorMessage(e));
+      });
+    return () => {
+      active = false;
+    };
+  }, [backend, current, refreshList]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "end" });
