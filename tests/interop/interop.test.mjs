@@ -161,7 +161,11 @@ test("desktop (natif) et web (WASM) échangent des messages chiffrés", async ()
       r.onsuccess = () => res(r.result);
     });
     const text = values.map((v) => new TextDecoder("latin1").decode(v)).join("\n");
-    return ["Bonjour depuis", "alice", "bob"].filter((n) => text.includes(n));
+    // Marqueurs longs : un nom de 3 lettres apparaît par hasard dans des
+    // centaines de Kio d'octets chiffrés (faux positif). Les clés de
+    // métadonnées et les textes figureraient en clair dans un instantané
+    // non chiffré.
+    return ["Bonjour depuis", "identity_secret", "conversations", "mls_state"].filter((n) => text.includes(n));
   });
   assert.deepEqual(idbLeak, [], "aucun clair dans IndexedDB");
 
