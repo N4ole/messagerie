@@ -388,6 +388,11 @@ mod tests {
 
     type Disk = Rc<RefCell<Option<Vec<u8>>>>;
 
+    /// Clé de test aléatoire (jamais de clé codée en dur).
+    fn key() -> [u8; 32] {
+        msg_crypto::random_bytes::<32>().unwrap()
+    }
+
     fn sink(disk: &Disk) -> Persist {
         let d = disk.clone();
         Box::new(move |b: &[u8]| *d.borrow_mut() = Some(b.to_vec()))
@@ -396,7 +401,7 @@ mod tests {
     #[test]
     fn persisted_snapshot_is_encrypted_and_reloads() {
         let disk: Disk = Rc::new(RefCell::new(None));
-        let key = [7u8; 32];
+        let key = key();
         let s = MemStore::open(None, &key, sink(&disk)).unwrap();
         s.set_meta("identity_secret", b"secret-tres-sensible").unwrap();
         s.insert_conversation(&conv(b"g1", "bob")).unwrap();
@@ -409,7 +414,7 @@ mod tests {
             assert!(!blob.windows(needle.len()).any(|w| w == needle));
         }
         // Mauvaise clé ou instantané altéré : refus.
-        assert!(MemStore::open(Some(&blob), &[8u8; 32], sink(&disk)).is_err());
+        assert!(MemStore::open(Some(&blob), &self::key(), sink(&disk)).is_err());
         let mut bad = blob.clone();
         let n = bad.len() - 1;
         bad[n] ^= 1;
@@ -424,7 +429,7 @@ mod tests {
     #[test]
     fn ordering_limit_expiry_and_transactions() {
         let disk: Disk = Rc::new(RefCell::new(None));
-        let mut s = MemStore::open(None, &[1u8; 32], sink(&disk)).unwrap();
+        let mut s = MemStore::open(None, &key(), sink(&disk)).unwrap();
         s.insert_conversation(&conv(b"g", "bob")).unwrap();
         for (i, t) in [(1, 30), (2, 10), (3, 20), (4, 20)] {
             s.insert_message(&msg(&format!("m{i}"), b"g", t, i == 4)).unwrap();

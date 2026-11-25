@@ -20,5 +20,6 @@ thiserror.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+getrandom.workspace = true
 tokio = { workspace = true }
 uuid.workspace = true

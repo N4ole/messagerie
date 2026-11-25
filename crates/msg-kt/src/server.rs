@@ -88,11 +88,16 @@ mod tests {
     use crate::{directory_value, verify_audit, verify_lookup};
     use msg_proto::{KtAudit, KtRoot};
 
-    const SEED: [u8; 32] = [42u8; 32];
+    /// Graine VRF de test aléatoire (jamais de clé codée en dur).
+    fn seed() -> [u8; 32] {
+        let mut s = [0u8; 32];
+        getrandom::fill(&mut s).unwrap();
+        s
+    }
 
     #[tokio::test]
     async fn lookup_and_audit_roundtrip() {
-        let d = KtDirectory::new(SEED).await.unwrap();
+        let d = KtDirectory::new(seed()).await.unwrap();
         let v1 = directory_value(Some(&[1u8; 32]), &[]);
         let v2 = directory_value(Some(&[2u8; 32]), &[]);
         let (e1, r1) = d.publish(&[("alice".into(), v1.clone()), ("bob".into(), v2.clone())]).await.unwrap();
@@ -102,7 +107,7 @@ mod tests {
         // Une autre valeur, un autre utilisateur ou une autre clé VRF : refus.
         assert_eq!(verify_lookup(d.vrf_public_key(), "alice", &l, &v2), Err(KtError::ValueMismatch));
         assert!(verify_lookup(d.vrf_public_key(), "bob", &l, &v1).is_err());
-        let other = KtDirectory::new([7u8; 32]).await.unwrap();
+        let other = KtDirectory::new(seed()).await.unwrap();
         assert!(verify_lookup(other.vrf_public_key(), "alice", &l, &v1).is_err());
         // Racine altérée : refus.
         let mut bad = l.clone();
@@ -140,8 +145,9 @@ mod tests {
             vec![("carol".into(), vec![4; 32]), ("bob".into(), vec![5; 32])],
         ];
         let mut roots = Vec::new();
+        let seed = seed();
         for _ in 0..2 {
-            let d = KtDirectory::new(SEED).await.unwrap();
+            let d = KtDirectory::new(seed).await.unwrap();
             let mut r = Vec::new();
             for b in &batches {
                 r.push(d.publish(b).await.unwrap());
