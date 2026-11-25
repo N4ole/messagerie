@@ -45,7 +45,7 @@ docs/adr/{0013,0014}, ADR 0006 et 0008 complétés, guides, ce rapport
 |---|---|---|
 | `msg-kt` | 3 | valeur canonique (ordre, KeyPackages sans effet, toute modification détectée) ; **preuve refusée** pour une autre valeur, un autre utilisateur, une autre clé VRF, une racine altérée ; preuves d'ajout seul, point de départ incohérent ou racine intermédiaire falsifiée refusés ; **rejeu déterministe** |
 | `msg-client-core` | 17 | base web : **instantané illisible** (aucun secret, contenu ou nom), mauvaise clé et altération refusées, transactions atomiques ; épinglage (clé épinglée, renouvellement à clé constante, chaîne exigée hors `.onion`) ; URL `.onion` |
-| `msg-tor` | 1 (+1 manuel) | proxy : relais seulement avec les bons identifiants, refus sans authentification, erreur sans détail si la destination est injoignable ; amorçage Tor réel (`--ignored`, job CI informatif) |
+| `msg-tor` | 1 (+1 réseau) | proxy : relais seulement avec les bons identifiants, refus sans authentification, erreur sans détail si la destination est injoignable ; **amorçage Tor réel réussi en CI** (Linux, ≈ 10 s ; job informatif, car dépendant du réseau Tor public) |
 | `msg-server` (bout en bout) | 9 + **3** | voir ci-dessous |
 | UI (Vitest) | 35 (+11) | appareils (liste, révocation, approbation par code, appareil secondaire), liaison (code puis session), avis de révocation, backend web (WebSocket à ticket, persistance, révocation ⇒ effacement), réseau (Tor configuré **avant** toute connexion, aucune tentative si Tor échoue) |
 | **Interopérabilité** (Chromium) | 2 | voir ci-dessous |
@@ -143,8 +143,8 @@ Serveur avec client web : `MSG_WEB_DIR=ui/dist-web` (voir le
    web). Pas de passkeys ni d'anti-capture (flou dissuasif seulement) ; effacement de la
    mémoire non garanti dans un navigateur ; coffre Argon2id allégé (32 Mio) ; écritures
    IndexedDB différées. **Mode d'appoint** : le desktop reste recommandé.
-4. **Tor** : l'**amorçage réel n'a pas pu être testé dans cet environnement** (réseau Tor
-   bloqué) ; il est exercé par un job CI informatif et par la recette Windows (points 24 à 27).
+4. **Tor** : l'amorçage réel d'arti est vérifié en CI (Linux) ; la connexion à un **service
+   onion réel** et le comportement sous Windows restent à vérifier en recette (points 24 à 27).
    Ponts et transports enfichables non intégrés (Tor bloqué ⇒ pas de connexion en mode
    strict, par construction). Un logiciel malveillant dans la session de l'utilisateur
    pourrait lire les identifiants du proxy en mémoire (il pourrait de toute façon lire les
