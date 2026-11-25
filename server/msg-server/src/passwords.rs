@@ -5,7 +5,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use subtle::ConstantTimeEq;
-use totp_rs::{Algorithm as TotpAlg, Secret, TOTP};
+use totp_rs::{Algorithm as TotpAlg, Builder as TotpBuilder, Secret, Totp};
 
 use crate::config::Config;
 
@@ -45,8 +45,16 @@ impl<'a> PasswordHasherCfg<'a> {
 }
 
 /// Paramètres TOTP : SHA-1 / 6 chiffres / 30 s (compatibilité applis), tolérance ±1 pas.
-pub fn totp(secret: &[u8], issuer: &str, account: &str) -> anyhow::Result<TOTP> {
-    TOTP::new(TotpAlg::SHA1, 6, 1, 30, secret.to_vec(), Some(issuer.to_owned()), account.to_owned())
+pub fn totp(secret: &[u8], issuer: &str, account: &str) -> anyhow::Result<Totp> {
+    TotpBuilder::new()
+        .with_algorithm(TotpAlg::SHA1)
+        .with_digits(6)
+        .with_skew(1)
+        .with_step_duration(30)
+        .with_secret(secret.to_vec())
+        .with_issuer(Some(issuer))
+        .with_account_name(account)
+        .build()
         .map_err(|e| anyhow::anyhow!("TOTP : {e}"))
 }
 
@@ -55,12 +63,12 @@ pub fn new_totp_secret() -> anyhow::Result<Vec<u8>> {
 }
 
 pub fn totp_base32(secret: &[u8]) -> String {
-    Secret::Raw(secret.to_vec()).to_encoded().to_string()
+    Secret::from(secret.to_vec()).to_base32()
 }
 
 /// Vérifie un code TOTP et retourne le pas (step) correspondant, en refusant
 /// tout pas déjà utilisé (`last_step`).
-pub fn check_totp(t: &TOTP, code: &str, now: i64, last_step: Option<i64>) -> Option<i64> {
+pub fn check_totp(t: &Totp, code: &str, now: i64, last_step: Option<i64>) -> Option<i64> {
     let code = code.trim();
     if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -70,7 +78,7 @@ pub fn check_totp(t: &TOTP, code: &str, now: i64, last_step: Option<i64>) -> Opt
         if s < 0 || last_step.is_some_and(|l| s <= l) {
             continue;
         }
-        let expected = t.generate((s * 30) as u64);
+        let expected = t.generate((s * 30) as u64).to_string();
         if bool::from(expected.as_bytes().ct_eq(code.as_bytes())) {
             return Some(s);
         }
@@ -139,7 +147,7 @@ mod tests {
         let secret = new_totp_secret().unwrap();
         let t = totp(&secret, "site", "alice").unwrap();
         let now = 1_700_000_000;
-        let code = t.generate(now as u64);
+        let code = t.generate(now as u64).to_string();
         let step = check_totp(&t, &code, now, None).unwrap();
         assert_eq!(step, now / 30);
         assert!(check_totp(&t, &code, now, Some(step)).is_none(), "rejeu refusé");
