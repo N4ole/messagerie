@@ -35,6 +35,13 @@
     "allow-safety-number",
     "allow-verify-safety-number",
     "allow-accept-identity-change",
+    "allow-link-start",
+    "allow-link-poll",
+    "allow-devices",
+    "allow-revoke-device",
+    "allow-link-requests",
+    "allow-approve-link",
+    "allow-reject-link",
     "allow-register-passkey",
     "allow-list-passkeys",
     "allow-delete-passkey"

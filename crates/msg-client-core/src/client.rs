@@ -12,10 +12,12 @@ use msg_proto::{
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use crate::account;
 use crate::api::{validate_server_url, ApiClient, DeviceAuth};
 use crate::error::{ClientError, Result};
 use crate::store::LocalStore;
-use crate::vault::{self, AccountPaths};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::vault::AccountPaths;
 
 /// Seuil de réapprovisionnement des KeyPackages et taille du lot.
 const KEY_PACKAGE_LOW_WATER: i64 = 10;
@@ -39,7 +41,7 @@ pub(crate) mod meta {
     pub const KT_STATE: &str = "kt_state";
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClientConfig {
     pub server_url: String,
     /// Dossier de données de l'application (contient `accounts/…`).
@@ -48,6 +50,15 @@ pub struct ClientConfig {
     pub argon2: Argon2Params,
     /// Autorise HTTP hors boucle locale (tests uniquement).
     pub allow_insecure_http: bool,
+    /// Navigateur : stockage clé-valeur de l'hôte (IndexedDB).
+    #[cfg(target_arch = "wasm32")]
+    pub kv: Option<std::rc::Rc<dyn crate::account::KvStore>>,
+}
+
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfig").field("server_url", &self.server_url).finish_non_exhaustive()
+    }
 }
 
 impl ClientConfig {
@@ -57,6 +68,8 @@ impl ClientConfig {
             data_dir: data_dir.into(),
             argon2: Argon2Params::PRODUCTION,
             allow_insecure_http: false,
+            #[cfg(target_arch = "wasm32")]
+            kv: None,
         }
     }
 
@@ -64,6 +77,7 @@ impl ClientConfig {
         ApiClient::new(validate_server_url(&self.server_url, self.allow_insecure_http)?)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn paths(&self, username: &str) -> AccountPaths {
         AccountPaths::new(&self.data_dir, self.server_url.trim_end_matches('/'), username)
     }
@@ -120,8 +134,7 @@ impl Client {
     /// enregistre sur le serveur, puis crée la base locale chiffrée.
     pub async fn enroll(cfg: &ClientConfig, username: &str, password: &str, totp_code: &str) -> Result<Self> {
         validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
-        let paths = cfg.paths(username);
-        if paths.exists() {
+        if account::exists(cfg, username) {
             return Err(ClientError::LocalAccountExists);
         }
         let identity = SigningKeyPair::generate()?;
@@ -155,8 +168,7 @@ impl Client {
             })
             .await?;
         // Le serveur a accepté : création du coffre et de la base locale.
-        let key = vault::create(&paths, password, cfg.argon2)?;
-        let mut store = LocalStore::open(&paths.db, &key)?;
+        let mut store = account::create(cfg, username, password)?;
         store.transaction(|s| {
             s.set_meta(meta::USERNAME, username.as_bytes())?;
             s.set_meta(meta::DEVICE_ID, device_id.as_bytes())?;
@@ -229,17 +241,7 @@ impl Client {
     /// Déverrouille le compte local (coffre + base) sans contacter le serveur.
     pub(crate) fn open_local(cfg: &ClientConfig, username: &str, password: &str) -> Result<Self> {
         validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
-        let paths = cfg.paths(username);
-        if !paths.exists() {
-            return Err(ClientError::NoLocalAccount);
-        }
-        let key = vault::open(&paths, password)?;
-        let store = LocalStore::open(&paths.db, &key)?;
-        // Renforcement opportuniste (TPM apparu depuis la création du coffre).
-        if let Err(e) = vault::harden(&paths, &key, password, cfg.argon2) {
-            tracing::warn!(error = %e, "renforcement TPM du coffre impossible");
-        }
-        drop(key);
+        let store = account::open(cfg, username, password)?;
         let stored_name = get_meta(&store, meta::USERNAME)?;
         if stored_name.as_slice() != username.as_bytes() {
             return Err(ClientError::Storage("compte local incohérent".into()));
@@ -344,7 +346,7 @@ impl Client {
 
     /// Protection du coffre local (`none`, `dpapi`, `tpm+dpapi`…).
     pub fn vault_protection(&self, cfg: &ClientConfig) -> String {
-        vault::protection(&cfg.paths(&self.username)).unwrap_or_else(|_| "inconnue".into())
+        account::protection(cfg, &self.username)
     }
 
     pub fn identity_fingerprint(&self) -> String {

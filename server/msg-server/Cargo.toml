@@ -33,6 +33,7 @@ sha2.workspace = true
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "uuid", "migrate", "macros"] }
 subtle.workspace = true
 thiserror.workspace = true
+tower-http = { version = "0.6", features = ["fs"] }
 tokio.workspace = true
 totp-rs.workspace = true
 tracing.workspace = true

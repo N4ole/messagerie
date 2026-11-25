@@ -542,6 +542,23 @@ pub struct AckRequest {
 }
 
 /// Notification poussée par WebSocket : ne contient jamais de contenu.
+/// Ticket d'ouverture du WebSocket pour le navigateur (qui ne peut pas
+/// signer les en-têtes d'une ouverture de WebSocket) : à usage unique,
+/// valable 30 secondes, obtenu par une requête signée.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct WsTicket {
+    pub ticket: String,
+    pub expires_at: i64,
+}
+
+/// Configuration publique du client web.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebConfig {
+    /// Mode Tor strict : le client web refuse de fonctionner hors d'une
+    /// adresse `.onion`.
+    pub onion_only: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PushEvent {

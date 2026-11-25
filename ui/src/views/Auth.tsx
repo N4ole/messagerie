@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useBackend } from "../api/context";
-import { errorMessage, isBackendError, type Activation, type Session } from "../api/types";
+import { errorMessage, isBackendError, type Activation, type LinkStart, type Session } from "../api/types";
 import { ThemeToggle } from "../components/ThemeToggle";
 
 const SERVER_KEY = "messagerie.server";
@@ -22,8 +22,11 @@ function saveServer(s: string) {
 }
 
 export function Auth({ onSession, notice = null }: { onSession: (s: Session) => void; notice?: string | null }) {
-  const [mode, setMode] = useState<"login" | "activate">("login");
-  const [server, setServer] = useState(loadServer);
+  const backend = useBackend();
+  const web = backend.platform === "web";
+  const [mode, setMode] = useState<"login" | "activate" | "link">("login");
+  // Client web : le serveur est celui qui a servi la page (même origine).
+  const [server, setServer] = useState(() => (web ? window.location.origin : loadServer()));
   return (
     <main className="auth">
       <div className="auth-card">
@@ -36,6 +39,7 @@ export function Auth({ onSession, notice = null }: { onSession: (s: Session) => 
             {notice}
           </p>
         )}
+        {!web && (
         <label>
           Serveur
           <input
@@ -47,6 +51,7 @@ export function Auth({ onSession, notice = null }: { onSession: (s: Session) => 
             required
           />
         </label>
+        )}
         <div role="tablist" className="tabs" aria-label="Mode">
           <button role="tab" aria-selected={mode === "login"} onClick={() => setMode("login")} type="button">
             Se connecter
@@ -54,12 +59,13 @@ export function Auth({ onSession, notice = null }: { onSession: (s: Session) => 
           <button role="tab" aria-selected={mode === "activate"} onClick={() => setMode("activate")} type="button">
             Activer un compte
           </button>
+          <button role="tab" aria-selected={mode === "link"} onClick={() => setMode("link")} type="button">
+            Lier cet appareil
+          </button>
         </div>
-        {mode === "login" ? (
-          <LoginForm server={server.trim()} onSession={onSession} />
-        ) : (
-          <ActivateForm server={server.trim()} onSession={onSession} />
-        )}
+        {mode === "login" && <LoginForm server={server.trim()} onSession={onSession} />}
+        {mode === "activate" && <ActivateForm server={server.trim()} onSession={onSession} />}
+        {mode === "link" && <LinkForm server={server.trim()} onSession={onSession} />}
       </div>
     </main>
   );
@@ -147,9 +153,11 @@ function LoginForm({ server, onSession }: { server: string; onSession: (s: Sessi
       <button type="submit" disabled={busy}>
         {busy ? "Connexion…" : "Se connecter"}
       </button>
-      <button type="button" className="ghost" disabled={busy} onClick={() => void withPasskey()}>
-        🔑 Se connecter avec une clé de sécurité
-      </button>
+      {backend.platform === "desktop" && (
+        <button type="button" className="ghost" disabled={busy} onClick={() => void withPasskey()}>
+          🔑 Se connecter avec une clé de sécurité
+        </button>
+      )}
     </form>
   );
 }
@@ -268,6 +276,131 @@ function ActivateForm({ server, onSession }: { server: string; onSession: (s: Se
       )}
       <button type="submit" disabled={busy}>
         {busy ? "Activation…" : "Activer"}
+      </button>
+    </form>
+  );
+}
+
+/** Intervalle de consultation de l'état d'une liaison. */
+export const LINK_POLL_MS = 2000;
+
+/**
+ * Liaison de cet appareil à un compte existant : après authentification,
+ * l'appareil affiche un code (et un QR code) à faire approuver depuis
+ * l'appareil principal. Aucune clé privée n'est transférée.
+ */
+function LinkForm({ server, onSession }: { server: string; onSession: (s: Session) => void }) {
+  const backend = useBackend();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [totp, setTotp] = useState("");
+  const [link, setLink] = useState<LinkStart | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!link) return;
+    let active = true;
+    const timer = setInterval(() => {
+      backend
+        .linkPoll()
+        .then((r) => {
+          if (!active) return;
+          if (r.status === "linked" && r.session) {
+            clearInterval(timer);
+            onSession(r.session);
+          } else if (r.status === "rejected" || r.status === "expired") {
+            clearInterval(timer);
+            setLink(null);
+            setError(r.status === "rejected" ? "Liaison refusée par l'appareil principal." : "Demande expirée : recommencez.");
+          }
+        })
+        .catch((e) => {
+          if (!active) return;
+          clearInterval(timer);
+          setLink(null);
+          setError(errorMessage(e));
+        });
+    }, LINK_POLL_MS);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [backend, link, onSession]);
+
+  async function start(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      setLink(await backend.linkStart(server, username.trim(), password, totp.trim()));
+      setPassword("");
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (link) {
+    return (
+      <div aria-label="Liaison en attente">
+        <p>
+          Sur votre <strong>appareil principal</strong>, ouvrez Sécurité → Appareils, puis scannez ce QR code ou saisissez
+          le code ci-dessous. Vérifiez que l'empreinte affichée là-bas est identique.
+        </p>
+        <img className="qr" src={link.qr_data_uri} alt="QR code de liaison" width={200} height={200} />
+        <p className="secret">
+          Code : <code>{link.code}</code>
+        </p>
+        <p className="secret">
+          Empreinte : <code className="fingerprint">{link.fingerprint}</code>
+        </p>
+        <p className="hint" role="status">
+          En attente d'approbation…
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={start} aria-label="Liaison">
+      <p className="hint">
+        Ajoute cet appareil à un compte déjà utilisé ailleurs. Les messages antérieurs à la liaison ne sont pas
+        transférés.
+      </p>
+      <label>
+        Identifiant
+        <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
+      </label>
+      <label>
+        Mot de passe
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete="current-password"
+          required
+        />
+      </label>
+      <label>
+        Code TOTP
+        <input
+          value={totp}
+          onChange={(e) => setTotp(e.target.value)}
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          pattern="[0-9]{6}"
+          required
+        />
+      </label>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+      <button type="submit" disabled={busy}>
+        {busy ? "Demande…" : "Demander la liaison"}
       </button>
     </form>
   );

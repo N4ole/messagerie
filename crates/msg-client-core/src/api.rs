@@ -30,6 +30,7 @@ pub fn validate_server_url(raw: &str, allow_insecure: bool) -> Result<Url> {
 }
 
 /// Message WebSocket (réexporté pour les applications).
+#[cfg(not(target_arch = "wasm32"))]
 pub use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 pub struct DeviceAuth {
@@ -62,6 +63,7 @@ async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
 }
 
 impl ApiClient {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(base: Url) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent("messagerie")
@@ -69,6 +71,14 @@ impl ApiClient {
             .redirect(reqwest::redirect::Policy::none())
             .https_only(base.scheme() == "https")
             .build()?;
+        Ok(Self { http, base, device: None, tokens: Mutex::new(None) })
+    }
+
+    /// Navigateur : `fetch` (TLS, délais et politique de redirection sont
+    /// ceux du navigateur ; la page est servie par le même site).
+    #[cfg(target_arch = "wasm32")]
+    pub fn new(base: Url) -> Result<Self> {
+        let http = reqwest::Client::builder().build()?;
         Ok(Self { http, base, device: None, tokens: Mutex::new(None) })
     }
 
@@ -297,6 +307,11 @@ impl ApiClient {
         self.public(Method::POST, "/v1/auth/link/poll", Some(req)).await
     }
 
+    /// Ticket d'ouverture du WebSocket (client web).
+    pub async fn ws_ticket(&self) -> Result<WsTicket> {
+        self.call::<(), _>(Method::POST, "/v1/ws/ticket", None).await
+    }
+
     pub async fn devices(&self) -> Result<Vec<OwnDevice>> {
         self.call::<(), _>(Method::GET, "/v1/devices", None).await
     }
@@ -389,6 +404,7 @@ impl ApiClient {
     }
 
     /// Ouvre le WebSocket de notification (requête d'ouverture signée).
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn connect_ws(
         &self,
     ) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>> {

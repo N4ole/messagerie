@@ -8,6 +8,7 @@ members = [
     "crates/msg-platform-win",
     "crates/msg-media",
     "crates/msg-kt",
+    "crates/msg-wasm",
     "server/msg-server",
     "server/msg-admin",
     "apps/desktop/src-tauri",

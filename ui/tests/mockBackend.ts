@@ -8,6 +8,7 @@ export const session: Session = {
   fingerprint: "FP",
   vaultProtection: "tpm+dpapi",
   captureProtection: "exclue des captures",
+  primary: true,
 };
 
 export function report(over: Partial<SyncReport> = {}): SyncReport {
@@ -64,11 +65,13 @@ export function message(over: Partial<Message> = {}): Message {
 
 export function mockBackend(
   over: Partial<Backend> = {},
-): Backend & { emit: (r: SyncReport) => void; lockNow: () => void } {
+): Backend & { emit: (r: SyncReport) => void; lockNow: () => void; revokeNow: () => void } {
   let listener: ((r: SyncReport) => void) | null = null;
   let locked: (() => void) | null = null;
+  let revoked: (() => void) | null = null;
   const conv = conversation();
   const b: Backend = {
+    platform: "desktop",
     activate: vi.fn(async () => ({
       totp_secret_base32: "JBSWY3DP",
       otpauth_uri: "otpauth://x",
@@ -118,6 +121,21 @@ export function mockBackend(
     })),
     verifySafetyNumber: vi.fn(async () => true),
     acceptIdentityChange: vi.fn(async () => undefined),
+    linkStart: vi.fn(async () => ({
+      code: "messagerie-link:1:00000000-0000-0000-0000-000000000001:ABCDEF0123456789ABCD",
+      fingerprint: "ABCD EF01 2345 6789 ABCD",
+      qr_data_uri: "data:image/svg+xml;base64,PHN2Zy8+",
+      expires_at: 0,
+    })),
+    linkPoll: vi.fn(async () => ({ status: "pending" as const, session: null })),
+    devices: vi.fn(async () => [
+      { device_id: "d", created_at: 1, last_seen_at: null, current: true },
+      { device_id: "d2", created_at: 2, last_seen_at: 3600, current: false },
+    ]),
+    revokeDevice: vi.fn(async () => undefined),
+    linkRequests: vi.fn(async () => []),
+    approveLink: vi.fn(async () => undefined),
+    rejectLink: vi.fn(async () => undefined),
     registerPasskey: vi.fn(async (name: string) => ({ id: 1, name, created_at: 0, last_used_at: null })),
     listPasskeys: vi.fn(async () => []),
     deletePasskey: vi.fn(async () => undefined),
@@ -133,7 +151,17 @@ export function mockBackend(
         locked = null;
       };
     }),
+    onRevoked: vi.fn(async (cb) => {
+      revoked = cb;
+      return () => {
+        revoked = null;
+      };
+    }),
     ...over,
   };
-  return Object.assign(b, { emit: (r: SyncReport) => listener?.(r), lockNow: () => locked?.() });
+  return Object.assign(b, {
+    emit: (r: SyncReport) => listener?.(r),
+    lockNow: () => locked?.(),
+    revokeNow: () => revoked?.(),
+  });
 }

@@ -29,6 +29,11 @@ pub struct Config {
     /// WebAuthn : identifiant de la partie de confiance (domaine) et origine
     /// publique du serveur. Désactivé si absent.
     pub webauthn: Option<WebauthnConfig>,
+    /// Client web : dossier des fichiers statiques (servis à la racine, même
+    /// origine que l'API). Désactivé si absent.
+    pub web_dir: Option<std::path::PathBuf>,
+    /// Client web en mode Tor strict (refus hors adresse `.onion`).
+    pub web_onion_only: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +74,8 @@ impl Config {
             attachment_retention_secs: 30 * 24 * 3600,
             attachment_quota_bytes: 1024 * 1024 * 1024,
             webauthn: None,
+            web_dir: None,
+            web_onion_only: false,
         }
     }
 
@@ -102,6 +109,8 @@ impl Config {
             (Err(_), Err(_)) => None,
             _ => bail!("MSG_WEBAUTHN_RP_ID et MSG_WEBAUTHN_ORIGIN doivent être définis ensemble"),
         };
+        c.web_dir = std::env::var_os("MSG_WEB_DIR").map(Into::into);
+        c.web_onion_only = matches!(std::env::var("MSG_WEB_ONION_ONLY").as_deref(), Ok("1" | "true"));
         if c.access_ttl_secs <= 0 || c.session_ttl_secs < c.access_ttl_secs {
             bail!("durées de session incohérentes");
         }

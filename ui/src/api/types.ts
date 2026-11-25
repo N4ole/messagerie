@@ -8,6 +8,38 @@ export interface Session {
   vaultProtection: string;
   /** Protection contre la capture d'écran appliquée à la fenêtre. */
   captureProtection: string;
+  /** Appareil principal (détient la clé d'identité, approuve les nouveaux appareils). */
+  primary: boolean;
+}
+
+/** Liaison de cet appareil à un compte existant (affiché par le nouvel appareil). */
+export interface LinkStart {
+  code: string;
+  fingerprint: string;
+  qr_data_uri: string;
+  expires_at: number;
+}
+
+export interface LinkPoll {
+  status: "pending" | "linked" | "rejected" | "expired";
+  session: Session | null;
+}
+
+/** Appareil du compte courant. */
+export interface Device {
+  device_id: string;
+  created_at: number;
+  last_seen_at: number | null;
+  current: boolean;
+}
+
+/** Demande de liaison en attente (vue par l'appareil principal). */
+export interface LinkRequest {
+  link_id: string;
+  device_id: string;
+  fingerprint: string;
+  created_at: number;
+  expires_at: number;
 }
 
 export type ConversationStatus = "ok" | "identity_changed" | "removed" | "left";
@@ -80,6 +112,7 @@ export interface SyncReport {
   removed_from: string[];
   expired: number;
   rotations: number;
+  reconciled?: number;
 }
 
 export interface Activation {

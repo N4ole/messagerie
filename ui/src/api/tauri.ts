@@ -4,6 +4,10 @@ import type { Backend } from "./backend";
 import type {
   Activation,
   Conversation,
+  Device,
+  LinkPoll,
+  LinkRequest,
+  LinkStart,
   Message,
   Passkey,
   SafetyNumber,
@@ -21,6 +25,7 @@ function b64url(s: string): string {
 }
 
 export const tauriBackend: Backend = {
+  platform: "desktop",
   activate: (server, username, code, password) =>
     invoke<Activation>("activate", { server, username, code, password }),
   enroll: (server, username, password, totp) => invoke<Session>("enroll", { server, username, password, totp }),
@@ -56,10 +61,20 @@ export const tauriBackend: Backend = {
   verifySafetyNumber: (username, scanned) => invoke<boolean>("verify_safety_number", { username, scanned }),
   acceptIdentityChange: (username) => invoke<void>("accept_identity_change", { username }),
 
+  linkStart: (server, username, password, totp) =>
+    invoke<LinkStart>("link_start", { server, username, password, totp }),
+  linkPoll: () => invoke<LinkPoll>("link_poll"),
+  devices: () => invoke<Device[]>("devices"),
+  revokeDevice: (deviceId) => invoke<void>("revoke_device", { deviceId }),
+  linkRequests: () => invoke<LinkRequest[]>("link_requests"),
+  approveLink: (code) => invoke<void>("approve_link", { code }),
+  rejectLink: (linkId) => invoke<void>("reject_link", { linkId }),
+
   registerPasskey: (name) => invoke<Passkey>("register_passkey", { name }),
   listPasskeys: () => invoke<Passkey[]>("list_passkeys"),
   deletePasskey: (id) => invoke<void>("delete_passkey", { id }),
 
   onUpdate: async (cb) => listen<SyncReport>("messages-updated", (e) => cb(e.payload)),
   onLocked: async (cb) => listen("locked", () => cb()),
+  onRevoked: async (cb) => listen("revoked", () => cb()),
 };

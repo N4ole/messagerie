@@ -27,6 +27,8 @@ pub struct Inner {
     pub webauthn: Option<Webauthn>,
     /// Répertoire Key Transparency, chargé à la première utilisation.
     pub kt: tokio::sync::Mutex<Option<msg_kt::KtDirectory>>,
+    /// Tickets WebSocket du client web (haché → contexte, expiration).
+    pub ws_tickets: Mutex<HashMap<Vec<u8>, (crate::auth::AuthContext, i64)>>,
     send_rate: Mutex<HashMap<Uuid, (i64, u32)>>,
 }
 
@@ -58,6 +60,7 @@ impl AppState {
                 hub,
                 webauthn,
                 kt: tokio::sync::Mutex::new(None),
+                ws_tickets: Mutex::new(HashMap::new()),
                 send_rate: Mutex::new(HashMap::new()),
             }),
         })

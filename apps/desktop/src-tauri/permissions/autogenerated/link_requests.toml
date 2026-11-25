@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-link-requests"
+description = "Enables the link_requests command without any pre-configured scope."
+commands.allow = ["link_requests"]
+
+[[permission]]
+identifier = "deny-link-requests"
+description = "Denies the link_requests command without any pre-configured scope."
+commands.deny = ["link_requests"]

@@ -11,6 +11,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "build:ui": "pnpm --filter @messagerie/ui build",
+    "build:web": "pnpm --filter @messagerie/ui build:web",
+    "test:interop": "pnpm --filter @messagerie/interop interop",
     "tauri": "pnpm --filter @messagerie/desktop tauri"
   },
   "pnpm": {

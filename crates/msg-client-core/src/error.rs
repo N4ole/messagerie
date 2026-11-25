@@ -47,6 +47,7 @@ impl ClientError {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<rusqlite::Error> for ClientError {
     fn from(e: rusqlite::Error) -> Self {
         ClientError::Storage(e.to_string())

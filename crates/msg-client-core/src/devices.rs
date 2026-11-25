@@ -18,12 +18,11 @@ use msg_proto::{LinkApproveRequest, LinkPollRequest, LinkStartRequest, LinkStatu
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use crate::account;
 use crate::api::ApiClient;
 use crate::client::{meta, Client, ClientConfig};
 use crate::error::{ClientError, Result};
 use crate::store::status;
-use crate::store::LocalStore;
-use crate::vault;
 
 /// Préfixe du code de liaison (affiché en QR code par le nouvel appareil).
 pub const LINK_CODE_PREFIX: &str = "messagerie-link:1:";
@@ -142,12 +141,10 @@ impl PendingLink {
                     .as_slice()
                     .try_into()
                     .map_err(|_| ClientError::Invalid("clé d'identité invalide".into()))?;
-                let paths = self.cfg.paths(&self.username);
-                if paths.exists() {
+                if account::exists(&self.cfg, &self.username) {
                     return Err(ClientError::LocalAccountExists);
                 }
-                let key = vault::create(&paths, &self.password, self.cfg.argon2)?;
-                let mut store = LocalStore::open(&paths.db, &key)?;
+                let mut store = account::create(&self.cfg, &self.username, &self.password)?;
                 let api_secret = self.api_key.secret_bytes();
                 store.transaction(|s| {
                     s.set_meta(meta::USERNAME, self.username.as_bytes())?;
@@ -161,7 +158,6 @@ impl PendingLink {
                     Ok(())
                 })?;
                 drop(store);
-                drop(key);
                 // Réouverture normale : même chemin que les connexions suivantes.
                 let client = Client::open_local(&self.cfg, &self.username, &self.password)?;
                 client.api.set_tokens(Some(tokens.clone()));
@@ -185,7 +181,7 @@ impl Client {
         totp_code: &str,
     ) -> Result<PendingLink> {
         msg_proto::validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
-        if cfg.paths(username).exists() {
+        if account::exists(cfg, username) {
             return Err(ClientError::LocalAccountExists);
         }
         let api_key = SigningKeyPair::generate()?;
@@ -297,7 +293,7 @@ impl Client {
 
     /// Efface les données locales d'un compte (appareil révoqué).
     pub fn wipe_local(cfg: &ClientConfig, username: &str) -> Result<()> {
-        vault::destroy(&cfg.paths(username))
+        account::destroy(cfg, username)
     }
 
     // --- Réconciliation des membres des groupes ---------------------------
