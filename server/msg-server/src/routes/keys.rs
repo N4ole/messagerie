@@ -1,11 +1,13 @@
 //! Annuaire : KeyPackages MLS et appareils publiés.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use msg_proto::{
-    KeyPackageCount, PublishedDevice, UploadKeyPackagesRequest, UserDirectoryEntry, MAX_KEY_PACKAGES_PER_UPLOAD,
+    KeyPackageCount, KtAudit, KtHead, PublishedDevice, UploadKeyPackagesRequest, UserDirectoryEntry,
+    MAX_KEY_PACKAGES_PER_UPLOAD,
 };
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::AuthContext;
@@ -100,15 +102,44 @@ pub async fn directory(
     Extension(_ctx): Extension<AuthContext>,
     Path(username): Path<String>,
 ) -> AppResult<Json<UserDirectoryEntry>> {
+    let kt = crate::kt::lookup(&st, &username).await?;
     let (identity_key, devices) = load_user(&st, &username).await?;
     Ok(Json(UserDirectoryEntry {
         username,
         identity_key,
         devices: devices.into_iter().map(|d| publish(d, None)).collect(),
+        kt,
     }))
 }
 
-/// Réclame un KeyPackage par appareil de l'utilisateur. Chaque KeyPackage est
+#[derive(Deserialize)]
+pub struct ClaimQuery {
+    /// Appareils visés (séparés par des virgules) ; par défaut tous.
+    devices: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct AuditQuery {
+    from: u64,
+    to: u64,
+}
+
+pub async fn kt_head(State(st): State<AppState>, Extension(_ctx): Extension<AuthContext>) -> AppResult<Json<KtHead>> {
+    Ok(Json(crate::kt::head(&st).await?))
+}
+
+pub async fn kt_audit(
+    State(st): State<AppState>,
+    Extension(_ctx): Extension<AuthContext>,
+    Query(q): Query<AuditQuery>,
+) -> AppResult<Json<KtAudit>> {
+    Ok(Json(crate::kt::audit(&st, q.from, q.to).await?))
+}
+
+/// Réclame un KeyPackage par appareil de l'utilisateur (ou par appareil
+/// demandé). La réponse liste tous les appareils, pour la vérification Key
+/// Transparency ; seuls ceux qui ont reçu un KeyPackage sont à ajouter.
+/// Chaque KeyPackage est
 /// à usage unique et supprimé à la distribution, sauf le dernier (« dernier
 /// recours », RFC 9420 §16.8) qui est conservé pour ne jamais bloquer
 /// l'établissement d'une conversation.
@@ -116,11 +147,24 @@ pub async fn claim(
     State(st): State<AppState>,
     Extension(ctx): Extension<AuthContext>,
     Path(username): Path<String>,
+    Query(q): Query<ClaimQuery>,
 ) -> AppResult<Json<UserDirectoryEntry>> {
+    let wanted: Option<Vec<Uuid>> = match &q.devices {
+        Some(list) => Some(
+            list.split(',')
+                .map(|d| d.trim().parse::<Uuid>())
+                .collect::<Result<_, _>>()
+                .map_err(|_| AppError::bad_request("liste d'appareils invalide"))?,
+        ),
+        None => None,
+    };
+    let kt = crate::kt::lookup(&st, &username).await?;
     let (identity_key, devices) = load_user(&st, &username).await?;
     let mut out = Vec::with_capacity(devices.len());
+    let mut claimed = 0;
     for d in devices {
-        if d.id == ctx.device_id {
+        if d.id == ctx.device_id || wanted.as_ref().is_some_and(|w| !w.contains(&d.id)) {
+            out.push(publish(d, None));
             continue;
         }
         let mut tx = st.db().begin().await?;
@@ -139,11 +183,12 @@ pub async fn claim(
         };
         tx.commit().await?;
         if kp.is_some() {
-            out.push(publish(d, kp));
+            claimed += 1;
         }
+        out.push(publish(d, kp));
     }
-    if out.is_empty() {
+    if claimed == 0 {
         return Err(AppError::not_found());
     }
-    Ok(Json(UserDirectoryEntry { username, identity_key, devices: out }))
+    Ok(Json(UserDirectoryEntry { username, identity_key, devices: out, kt }))
 }

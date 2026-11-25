@@ -25,12 +25,18 @@ pub(crate) mod meta {
     pub const USERNAME: &str = "username";
     pub const DEVICE_ID: &str = "device_id";
     pub const IDENTITY_SECRET: &str = "identity_secret";
+    /// Clé d'identité publique (seule présente sur un appareil secondaire).
+    pub const IDENTITY_PUBLIC: &str = "identity_public";
     pub const API_SECRET: &str = "api_secret";
     pub const MLS_PUBLIC: &str = "mls_public";
     pub const MLS_STATE: &str = "mls_state";
     pub const CERT_CREATED_AT: &str = "cert_created_at";
     pub const CERT_SIGNATURE: &str = "cert_signature";
     pub const SESSION: &str = "session";
+    /// Key Transparency : clé VRF mémorisée au premier usage, dernière
+    /// époque et racine vérifiées.
+    pub const KT_VRF: &str = "kt_vrf";
+    pub const KT_STATE: &str = "kt_state";
 }
 
 #[derive(Debug, Clone)]
@@ -54,11 +60,11 @@ impl ClientConfig {
         }
     }
 
-    fn api(&self) -> Result<ApiClient> {
+    pub(crate) fn api(&self) -> Result<ApiClient> {
         ApiClient::new(validate_server_url(&self.server_url, self.allow_insecure_http)?)
     }
 
-    fn paths(&self, username: &str) -> AccountPaths {
+    pub(crate) fn paths(&self, username: &str) -> AccountPaths {
         AccountPaths::new(&self.data_dir, self.server_url.trim_end_matches('/'), username)
     }
 }
@@ -73,9 +79,16 @@ pub struct Client {
     pub(crate) api: ApiClient,
     pub(crate) store: LocalStore,
     pub(crate) mls: MlsClient,
-    pub(crate) identity: SigningKeyPair,
+    /// Clé d'identité publique de l'utilisateur.
+    pub(crate) identity_public: [u8; 32],
+    /// Clé d'identité privée : présente uniquement sur l'appareil principal
+    /// (celui qui a créé l'identité). Elle ne quitte jamais cet appareil ;
+    /// les appareils liés reçoivent seulement un certificat signé.
+    pub(crate) identity_secret: Option<SigningKeyPair>,
     pub(crate) username: String,
     pub(crate) device_id: Uuid,
+    /// Date (ms) de la dernière réconciliation des membres des groupes.
+    pub(crate) last_reconcile_ms: i64,
 }
 
 pub(crate) fn get_meta(store: &LocalStore, k: &str) -> Result<Zeroizing<Vec<u8>>> {
@@ -156,9 +169,20 @@ impl Client {
             Ok(())
         })?;
         api.set_device(DeviceAuth { device_id, api_key });
-        let client = Self { api, store, mls, identity, username: username.into(), device_id };
+        let client = Self {
+            api,
+            store,
+            mls,
+            identity_public: identity.public_bytes(),
+            identity_secret: Some(identity),
+            username: username.into(),
+            device_id,
+            last_reconcile_ms: 0,
+        };
+        client.store.set_meta(meta::IDENTITY_PUBLIC, &client.identity_public)?;
         client.save_session(&tokens)?;
         client.ensure_key_packages().await?;
+        client.kt_check_self().await?;
         Ok(client)
     }
 
@@ -197,6 +221,8 @@ impl Client {
             }
         }
         client.ensure_key_packages().await?;
+        // Le journal Key Transparency doit publier notre propre clé.
+        client.kt_check_self().await?;
         Ok(client)
     }
 
@@ -220,7 +246,17 @@ impl Client {
         }
         let device_id =
             Uuid::from_slice(&get_meta(&store, meta::DEVICE_ID)?).map_err(|e| ClientError::Storage(e.to_string()))?;
-        let identity = SigningKeyPair::from_secret_bytes(&get_meta(&store, meta::IDENTITY_SECRET)?)?;
+        let identity_secret = match store.get_meta(meta::IDENTITY_SECRET)? {
+            Some(sk) => Some(SigningKeyPair::from_secret_bytes(&sk)?),
+            None => None,
+        };
+        let identity_public: [u8; 32] = match &identity_secret {
+            Some(k) => k.public_bytes(),
+            None => get_meta(&store, meta::IDENTITY_PUBLIC)?
+                .as_slice()
+                .try_into()
+                .map_err(|_| ClientError::Storage("clé d'identité publique".into()))?,
+        };
         let api_key = SigningKeyPair::from_secret_bytes(&get_meta(&store, meta::API_SECRET)?)?;
         let mls = MlsClient::restore(
             MemberIdentity { username: username.into(), device_id },
@@ -229,7 +265,16 @@ impl Client {
         )?;
         let mut api = cfg.api()?;
         api.set_device(DeviceAuth { device_id, api_key });
-        Ok(Self { api, store, mls, identity, username: username.into(), device_id })
+        Ok(Self {
+            api,
+            store,
+            mls,
+            identity_public,
+            identity_secret,
+            username: username.into(),
+            device_id,
+            last_reconcile_ms: 0,
+        })
     }
 
     pub(crate) fn registration(&self) -> Result<DeviceRegistration> {
@@ -240,7 +285,7 @@ impl Client {
         let api_pub = SigningKeyPair::from_secret_bytes(&get_meta(&self.store, meta::API_SECRET)?)?.public_bytes();
         Ok(DeviceRegistration {
             device_id: self.device_id,
-            identity_key: self.identity.public_bytes().to_vec(),
+            identity_key: self.identity_public.to_vec(),
             api_key: api_pub.to_vec(),
             mls_signature_key: self.mls.signature_public_key(),
             cert_created_at: i64::from_be_bytes(ts),
@@ -303,7 +348,13 @@ impl Client {
     }
 
     pub fn identity_fingerprint(&self) -> String {
-        fingerprint(&self.identity.public_bytes())
+        fingerprint(&self.identity_public)
+    }
+
+    /// Appareil principal : détient la clé d'identité, approuve les nouveaux
+    /// appareils et, s'il administre un groupe, en émet les commits.
+    pub fn is_primary(&self) -> bool {
+        self.identity_secret.is_some()
     }
 
     pub fn api(&self) -> &ApiClient {

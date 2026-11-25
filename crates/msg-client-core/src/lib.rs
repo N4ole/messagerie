@@ -10,7 +10,9 @@ pub mod api;
 pub mod attachments;
 pub mod client;
 pub mod conversations;
+pub mod devices;
 pub mod error;
+pub mod kt;
 pub mod passkey;
 pub mod store;
 pub mod vault;
@@ -18,6 +20,7 @@ pub mod vault;
 pub use attachments::DownloadedFile;
 pub use client::{Client, ClientConfig};
 pub use conversations::{AttachmentView, ConversationView, MessageView, SafetyNumberView, SyncReport};
+pub use devices::{LinkOutcome, LinkRequestInfo, PendingLink};
 pub use error::{ClientError, Result};
 
 pub(crate) fn now_secs() -> i64 {

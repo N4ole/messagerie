@@ -65,8 +65,10 @@ async fn verify_signed(st: &AppState, parts: &axum::http::request::Parts, body: 
     .bind(device_id)
     .fetch_optional(st.db())
     .await?;
-    let (api_key, account_id, username, role, status) = row.ok_or_else(AppError::unauthorized)?;
     let path = parts.uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    let Some((api_key, account_id, username, role, status)) = row else {
+        return Err(revoked_or_unknown(st, parts, path, body, device_id, ts, nonce, sig).await);
+    };
     msg_crypto::request::verify_request(&api_key, &device_id, parts.method.as_str(), path, body, ts, nonce, sig)
         .map_err(|_| AppError::unauthorized())?;
     // Anti-rejeu : un nonce ne peut servir qu'une fois par appareil.
@@ -95,6 +97,47 @@ async fn verify_signed(st: &AppState, parts: &axum::http::request::Parts, body: 
         role: Role::parse(&role).ok_or_else(AppError::internal)?,
         status: AccountStatus::parse(&status).ok_or_else(AppError::internal)?,
     })
+}
+
+/// Appareil inconnu : s'il a été révoqué **et** que la requête est bien
+/// signée par sa clé, on le lui indique pour qu'il efface ses données
+/// locales. Sinon, simple refus (rien n'est révélé à un tiers).
+#[allow(clippy::too_many_arguments)]
+async fn revoked_or_unknown(
+    st: &AppState,
+    parts: &axum::http::request::Parts,
+    path: &str,
+    body: &[u8],
+    device_id: Uuid,
+    ts: i64,
+    nonce: &str,
+    sig: &str,
+) -> AppError {
+    let row: Result<Option<(Vec<u8>,)>, _> = sqlx::query_as("SELECT api_key FROM revoked_devices WHERE device_id = $1")
+        .bind(device_id)
+        .fetch_optional(st.db())
+        .await;
+    match row {
+        Ok(Some((api_key,))) => {
+            if msg_crypto::request::verify_request(
+                &api_key,
+                &device_id,
+                parts.method.as_str(),
+                path,
+                body,
+                ts,
+                nonce,
+                sig,
+            )
+            .is_ok()
+            {
+                AppError::new(StatusCode::UNAUTHORIZED, ErrorCode::DeviceRevoked, "appareil révoqué")
+            } else {
+                AppError::unauthorized()
+            }
+        }
+        _ => AppError::unauthorized(),
+    }
 }
 
 async fn buffer(req: Request) -> AppResult<(axum::http::request::Parts, axum::body::Bytes)> {

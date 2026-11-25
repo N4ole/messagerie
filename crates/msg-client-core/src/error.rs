@@ -30,6 +30,21 @@ pub enum ClientError {
     Crypto(#[from] msg_crypto::CryptoError),
     #[error("{0}")]
     Invalid(String),
+    /// Échec de vérification Key Transparency : le serveur présente un
+    /// annuaire non prouvé ou un journal incohérent (possible compromission).
+    #[error("ALERTE Key Transparency : {0} — le serveur est peut-être compromis")]
+    KeyTransparency(String),
+    #[error("cet appareil a été révoqué")]
+    DeviceRevoked,
+    #[error("seul l'appareil principal (détenteur de la clé d'identité) peut faire cela")]
+    NotPrimaryDevice,
+}
+
+impl ClientError {
+    /// L'appareil a été révoqué : ses données locales doivent être effacées.
+    pub fn is_device_revoked(&self) -> bool {
+        matches!(self, ClientError::DeviceRevoked | ClientError::Api { code: msg_proto::ErrorCode::DeviceRevoked, .. })
+    }
 }
 
 impl From<rusqlite::Error> for ClientError {

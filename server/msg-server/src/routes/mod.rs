@@ -3,6 +3,7 @@
 pub mod account;
 pub mod admin;
 pub mod attachments;
+pub mod devices;
 pub mod keys;
 pub mod messages;
 pub mod webauthn;
@@ -27,7 +28,9 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/auth/activate", post(account::activate))
         .route("/v1/auth/confirm-totp", post(account::confirm_totp))
         .route("/v1/auth/login", post(account::login))
-        .route("/v1/auth/webauthn/challenge", post(webauthn::login_challenge));
+        .route("/v1/auth/webauthn/challenge", post(webauthn::login_challenge))
+        .route("/v1/auth/link/start", post(devices::link_start))
+        .route("/v1/auth/link/poll", post(devices::link_poll));
 
     let signed = Router::new()
         .route("/v1/auth/refresh", post(account::refresh))
@@ -39,6 +42,13 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/keypackages/count", get(keys::count))
         .route("/v1/users/{username}", get(keys::directory))
         .route("/v1/users/{username}/claim", post(keys::claim))
+        .route("/v1/kt/head", get(keys::kt_head))
+        .route("/v1/kt/audit", get(keys::kt_audit))
+        .route("/v1/devices", get(devices::list))
+        .route("/v1/devices/{device_id}", delete(devices::revoke_own))
+        .route("/v1/devices/links", get(devices::link_requests))
+        .route("/v1/devices/links/{link_id}/approve", post(devices::link_approve))
+        .route("/v1/devices/links/{link_id}", delete(devices::link_reject))
         .route("/v1/messages", post(messages::send))
         .route("/v1/queue", get(messages::queue))
         .route("/v1/queue/ack", post(messages::ack))

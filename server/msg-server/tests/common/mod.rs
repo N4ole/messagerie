@@ -54,6 +54,8 @@ pub struct TestServer {
     pub url: String,
     pub pool: PgPool,
     pub dirs: Vec<tempfile::TempDir>,
+    /// Configuration du serveur (même secret), pour simuler un redémarrage.
+    pub server_cfg: Config,
 }
 
 pub async fn spawn() -> TestServer {
@@ -86,9 +88,10 @@ async fn spawn_with(webauthn: bool) -> TestServer {
     if webauthn {
         cfg.webauthn = Some(msg_server::config::WebauthnConfig { rp_id: "localhost".into(), origin: url.clone() });
     }
+    let server_cfg = cfg.clone();
     let app = router(AppState::try_new(pool.clone(), cfg).expect("configuration"));
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    TestServer { url, pool, dirs: Vec::new() }
+    TestServer { url, pool, dirs: Vec::new(), server_cfg }
 }
 
 pub fn totp_code(base32: &str, offset_steps: i64) -> String {

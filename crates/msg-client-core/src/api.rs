@@ -270,6 +270,53 @@ impl ApiClient {
         self.call::<(), _>(Method::POST, &format!("/v1/users/{username}/claim"), None).await
     }
 
+    /// Réclame des KeyPackages pour certains appareils seulement.
+    pub async fn claim_devices(&self, username: &str, devices: &[Uuid]) -> Result<UserDirectoryEntry> {
+        validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
+        let list = devices.iter().map(Uuid::to_string).collect::<Vec<_>>().join(",");
+        self.call::<(), _>(Method::POST, &format!("/v1/users/{username}/claim?devices={list}"), None).await
+    }
+
+    // --- Key Transparency ---------------------------------------------------
+
+    pub async fn kt_head(&self) -> Result<KtHead> {
+        self.call::<(), _>(Method::GET, "/v1/kt/head", None).await
+    }
+
+    pub async fn kt_audit(&self, from: u64, to: u64) -> Result<KtAudit> {
+        self.call::<(), _>(Method::GET, &format!("/v1/kt/audit?from={from}&to={to}"), None).await
+    }
+
+    // --- Appareils ------------------------------------------------------------
+
+    pub async fn link_start(&self, req: &LinkStartRequest) -> Result<LinkStartResponse> {
+        self.public(Method::POST, "/v1/auth/link/start", Some(req)).await
+    }
+
+    pub async fn link_poll(&self, req: &LinkPollRequest) -> Result<LinkPollResponse> {
+        self.public(Method::POST, "/v1/auth/link/poll", Some(req)).await
+    }
+
+    pub async fn devices(&self) -> Result<Vec<OwnDevice>> {
+        self.call::<(), _>(Method::GET, "/v1/devices", None).await
+    }
+
+    pub async fn revoke_device(&self, device: Uuid) -> Result<()> {
+        self.call::<(), ()>(Method::DELETE, &format!("/v1/devices/{device}"), None).await
+    }
+
+    pub async fn link_requests(&self) -> Result<Vec<LinkRequestView>> {
+        self.call::<(), _>(Method::GET, "/v1/devices/links", None).await
+    }
+
+    pub async fn link_approve(&self, link_id: Uuid, req: &LinkApproveRequest) -> Result<()> {
+        self.call(Method::POST, &format!("/v1/devices/links/{link_id}/approve"), Some(req)).await
+    }
+
+    pub async fn link_reject(&self, link_id: Uuid) -> Result<()> {
+        self.call::<(), ()>(Method::DELETE, &format!("/v1/devices/links/{link_id}"), None).await
+    }
+
     pub async fn send(&self, req: &SendRequest) -> Result<SendResponse> {
         self.call(Method::POST, "/v1/messages", Some(req)).await
     }

@@ -95,6 +95,9 @@ pub struct SyncReport {
     pub expired: usize,
     /// Rotations de clés effectuées ou proposées.
     pub rotations: usize,
+    /// Groupes dont les appareils membres ont été mis à jour (ajout
+    /// d'appareils liés, retrait d'appareils révoqués).
+    pub reconciled: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -148,7 +151,7 @@ impl Client {
     /// conversation est suspendue jusqu'à vérification ou acceptation.
     fn check_identity(&self, username: &str, identity_key: &[u8]) -> Result<IdentityCheck> {
         if username == self.username {
-            return if identity_key == self.identity.public_bytes() {
+            return if identity_key == self.identity_public {
                 Ok(IdentityCheck::Trusted)
             } else {
                 Err(ClientError::IdentityChanged(username.into()))
@@ -169,7 +172,7 @@ impl Client {
         }
     }
 
-    fn verify_device(username: &str, identity_key: &[u8], d: &PublishedDevice) -> Result<()> {
+    pub(crate) fn verify_device(username: &str, identity_key: &[u8], d: &PublishedDevice) -> Result<()> {
         DeviceCertificate {
             username: username.into(),
             device_id: d.device_id,
@@ -195,7 +198,7 @@ impl Client {
                 continue;
             }
             if !dirs.contains_key(name) {
-                let entry = self.api.directory(name).await?;
+                let entry = self.verified_directory(name).await?;
                 if self.check_identity(name, &entry.identity_key)? == IdentityCheck::Changed {
                     out.changed.push(name.clone());
                 }
@@ -220,8 +223,28 @@ impl Client {
 
     /// Réclame et vérifie un KeyPackage par appareil de `username`.
     async fn claim_verified(&self, username: &str) -> Result<(Vec<Vec<u8>>, Vec<Uuid>)> {
+        self.claim_verified_devices(username, None).await
+    }
+
+    /// Mes autres appareils (KeyPackages réclamés), pour qu'ils participent
+    /// aussi à la conversation. Aucun autre appareil : listes vides.
+    async fn claim_own_devices(&self) -> Result<(Vec<Vec<u8>>, Vec<Uuid>)> {
+        match self.claim_verified_devices(&self.username.clone(), None).await {
+            Err(ClientError::Api { status: 404, .. }) => Ok((Vec::new(), Vec::new())),
+            r => r,
+        }
+    }
+
+    /// Réclame et vérifie (certificat, Key Transparency, KeyPackage) les
+    /// KeyPackages des appareils de `username` (tous, ou ceux indiqués).
+    /// Les appareils sans KeyPackage disponible sont ignorés.
+    pub(crate) async fn claim_verified_devices(
+        &self,
+        username: &str,
+        only: Option<&[Uuid]>,
+    ) -> Result<(Vec<Vec<u8>>, Vec<Uuid>)> {
         validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
-        let entry = self.api.claim(username).await?;
+        let entry = self.verified_claim(username, only).await?;
         if self.check_identity(username, &entry.identity_key)? == IdentityCheck::Changed {
             return Err(ClientError::IdentityChanged(username.into()));
         }
@@ -229,10 +252,10 @@ impl Client {
         let mut devices = Vec::new();
         for d in &entry.devices {
             Self::verify_device(username, &entry.identity_key, d)?;
-            let kp = d
-                .key_package
-                .as_ref()
-                .ok_or_else(|| ClientError::Verification(username.into(), "KeyPackage manquant".into()))?;
+            if only.is_some_and(|o| !o.contains(&d.device_id)) || d.device_id == self.device_id {
+                continue;
+            }
+            let Some(kp) = d.key_package.as_ref() else { continue };
             let m = self.mls.inspect_key_package(kp)?;
             if m.identity != (MemberIdentity { username: username.into(), device_id: d.device_id })
                 || m.signature_key != d.mls_signature_key
@@ -242,6 +265,13 @@ impl Client {
             kps.push(kp.clone());
             devices.push(d.device_id);
         }
+        if kps.is_empty() {
+            return Err(ClientError::Api {
+                status: 404,
+                code: msg_proto::ErrorCode::NotFound,
+                message: "aucun appareil disponible".into(),
+            });
+        }
         Ok((kps, devices))
     }
 
@@ -250,7 +280,7 @@ impl Client {
     /// Administrateur effectif : celui annoncé, sinon (conversations de la
     /// Phase 1) le plus petit identifiant parmi les membres — règle
     /// déterministe identique sur tous les appareils.
-    fn effective_admin(&self, c: &StoredConversation) -> Option<String> {
+    pub(crate) fn effective_admin(&self, c: &StoredConversation) -> Option<String> {
         c.admin.clone().or_else(|| self.mls.members(&c.group_id).ok().and_then(|m| usernames(&m).into_iter().next()))
     }
 
@@ -334,6 +364,16 @@ impl Client {
         Ok(self.store.messages(&gid, limit.min(1000))?.into_iter().map(Self::view_message).collect())
     }
 
+    /// Appareils membres d'une conversation (utilisateur, appareil).
+    pub fn member_devices(&self, conversation_id: &str) -> Result<Vec<(String, Uuid)>> {
+        Ok(self
+            .mls
+            .members(&decode_id(conversation_id)?)?
+            .into_iter()
+            .map(|m| (m.identity.username, m.identity.device_id))
+            .collect())
+    }
+
     pub fn mark_read(&self, conversation_id: &str) -> Result<()> {
         self.store.mark_read(&decode_id(conversation_id)?)
     }
@@ -349,6 +389,10 @@ impl Client {
 
     fn require_admin(&self, c: &StoredConversation) -> Result<()> {
         if c.kind == "group" && self.effective_admin(c).as_deref() == Some(self.username.as_str()) {
+            // Un seul émetteur de commits par groupe : l'appareil principal.
+            if !self.is_primary() {
+                return Err(ClientError::NotPrimaryDevice);
+            }
             Ok(())
         } else {
             Err(ClientError::Invalid("action réservée à l'administrateur du groupe".into()))
@@ -357,7 +401,7 @@ impl Client {
 
     // --- Envoi -------------------------------------------------------------
 
-    fn other_devices(&self, group_id: &[u8]) -> Result<Vec<Uuid>> {
+    pub(crate) fn other_devices(&self, group_id: &[u8]) -> Result<Vec<Uuid>> {
         Ok(self
             .mls
             .members(group_id)?
@@ -367,7 +411,7 @@ impl Client {
             .collect())
     }
 
-    async fn post(&self, recipients: Vec<Uuid>, payload: Vec<u8>) -> Result<()> {
+    pub(crate) async fn post(&self, recipients: Vec<Uuid>, payload: Vec<u8>) -> Result<()> {
         if recipients.is_empty() {
             return Ok(());
         }
@@ -449,7 +493,10 @@ impl Client {
                 return self.view_conversation(c);
             }
         }
-        let (kps, recipients) = self.claim_verified(peer).await?;
+        let (mut kps, mut recipients) = self.claim_verified(peer).await?;
+        let (own_kps, own_devices) = self.claim_own_devices().await?;
+        kps.extend(own_kps);
+        recipients.extend(own_devices);
         let created = self.mls.create_group(&kps)?;
         let now = crate::now_ms();
         let mls_state = self.mls.export_state()?;
@@ -472,6 +519,14 @@ impl Client {
             s.insert_conversation(&conv)
         })?;
         self.post(recipients, created.welcome).await?;
+        // Annonce l'administrateur (utile à mes autres appareils, qui
+        // rejoignent aussi la conversation).
+        self.send_app(
+            &created.group_id,
+            AppBody::GroupInfo { name: String::new(), admin: self.username.clone() },
+            None,
+        )
+        .await?;
         self.persist_tokens()?;
         self.conversation(&hex::encode(&created.group_id))
     }
@@ -497,6 +552,9 @@ impl Client {
             kps.extend(k);
             recipients.extend(d);
         }
+        let (own_kps, own_devices) = self.claim_own_devices().await?;
+        kps.extend(own_kps);
+        recipients.extend(own_devices);
         let created = self.mls.create_group(&kps)?;
         let now = crate::now_ms();
         let mls_state = self.mls.export_state()?;
@@ -596,7 +654,7 @@ impl Client {
         let c = self.store.contact(username)?.ok_or_else(|| ClientError::Invalid("correspondant inconnu".into()))?;
         let changed = c.pending_identity_key.is_some();
         let key = c.pending_identity_key.unwrap_or(c.identity_key);
-        let n = safety::safety_number(&self.username, &self.identity.public_bytes(), username, &key);
+        let n = safety::safety_number(&self.username, &self.identity_public, username, &key);
         Ok((n, c.verified && !changed, changed))
     }
 
@@ -708,6 +766,7 @@ impl Client {
         }
         report.expired = self.store.purge_expired(crate::now_ms())?;
         report.rotations = self.rotate_due().await?;
+        report.reconciled = self.reconcile_due().await?;
         self.ensure_key_packages().await?;
         Ok(report)
     }
@@ -719,7 +778,7 @@ impl Client {
         let mut n = 0;
         for c in self.store.rotation_due(now, ROTATION_MAX_AGE_MS, ROTATION_MAX_SENT)? {
             let recipients = self.other_devices(&c.group_id)?;
-            let payload = if self.effective_admin(&c).as_deref() == Some(self.username.as_str()) {
+            let payload = if self.is_primary() && self.effective_admin(&c).as_deref() == Some(self.username.as_str()) {
                 self.mls.self_update(&c.group_id)?
             } else {
                 self.mls.propose_self_update(&c.group_id)?
@@ -768,8 +827,9 @@ impl Client {
                     kind: if direct { "direct" } else { "group" }.into(),
                     peer: if direct { outcome.others[0].clone() } else { String::new() },
                     name: None,
-                    // Conversation directe : son créateur (le correspondant) émet les commits.
-                    admin: if direct { Some(outcome.others[0].clone()) } else { None },
+                    // Administrateur annoncé par le message GroupInfo qui suit
+                    // le Welcome (le créateur peut être l'un de mes appareils).
+                    admin: None,
                     status: if outcome.changed.is_empty() { status::OK } else { status::IDENTITY_CHANGED }.into(),
                     created_at_ms: now,
                     last_activity_ms: now,
@@ -812,7 +872,9 @@ impl Client {
             Incoming::ProposalStored { group_id, .. } => {
                 // L'administrateur valide aussitôt les propositions (rotation, départ).
                 let c = self.store.conversation(&group_id)?;
-                if let Some(c) = c.filter(|c| self.effective_admin(c).as_deref() == Some(self.username.as_str())) {
+                if let Some(c) = c
+                    .filter(|c| self.is_primary() && self.effective_admin(c).as_deref() == Some(self.username.as_str()))
+                {
                     let recipients = self.other_devices(&c.group_id)?;
                     if let Some(commit) = self.mls.commit_pending(&c.group_id)? {
                         self.save_mls()?;
@@ -845,6 +907,7 @@ impl Client {
                         Some(serde_json::to_string(&attachment).map_err(|e| ClientError::Invalid(e.to_string()))?),
                     ),
                 };
+                let outgoing = sender.username == self.username;
                 let stored = StoredMessage {
                     id: format!("{gid_hex}:{}", app.id),
                     group_id,
@@ -855,7 +918,7 @@ impl Client {
                     attachment,
                     sent_at_ms: app.sent_at_ms,
                     received_at_ms: now,
-                    outgoing: false,
+                    outgoing,
                     expires_at_ms: app.expires_in_s.map(|t| now + i64::from(t) * 1000),
                 };
                 let new = self.store.insert_message(&stored)?;

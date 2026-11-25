@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 msg-proto.workspace = true
 msg-crypto.workspace = true
+msg-kt = { workspace = true, features = ["server"] }
 anyhow.workspace = true
 argon2.workspace = true
 axum = { version = "0.8", features = ["ws", "macros"] }

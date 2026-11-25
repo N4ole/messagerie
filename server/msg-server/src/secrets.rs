@@ -9,6 +9,8 @@ use zeroize::Zeroizing;
 pub struct ServerSecrets {
     pub pepper: Zeroizing<[u8; 32]>,
     totp_key: Zeroizing<[u8; 32]>,
+    /// Graine de la clé VRF du répertoire Key Transparency.
+    pub kt_vrf_seed: Zeroizing<[u8; 32]>,
 }
 
 impl ServerSecrets {
@@ -17,9 +19,11 @@ impl ServerSecrets {
         let hk = Hkdf::<Sha256>::new(Some(b"messagerie/server/v1"), master);
         let mut pepper = Zeroizing::new([0u8; 32]);
         let mut totp_key = Zeroizing::new([0u8; 32]);
+        let mut kt_vrf_seed = Zeroizing::new([0u8; 32]);
         hk.expand(b"argon2-pepper", pepper.as_mut()).expect("longueur valide");
         hk.expand(b"totp-at-rest", totp_key.as_mut()).expect("longueur valide");
-        Self { pepper, totp_key }
+        hk.expand(b"kt-vrf", kt_vrf_seed.as_mut()).expect("longueur valide");
+        Self { pepper, totp_key, kt_vrf_seed }
     }
 
     /// Chiffre un secret TOTP, lié au compte par l'AAD.

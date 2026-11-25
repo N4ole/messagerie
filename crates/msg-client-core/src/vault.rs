@@ -114,6 +114,25 @@ pub fn harden(paths: &AccountPaths, key: &[u8; 32], password: &str, params: Argo
 }
 
 /// Ouvre le coffre avec le mot de passe.
+/// Efface définitivement le compte local : clé TPM (si présente), coffre et
+/// base. Utilisé après révocation de l'appareil. La base SQLCipher étant
+/// chiffrée, la suppression de la clé suffit à la rendre illisible même si
+/// le système de fichiers conserve des blocs.
+pub fn destroy(paths: &AccountPaths) -> Result<()> {
+    let _ = msg_platform_win::tpm::delete_key(&paths.tpm_key_name());
+    if paths.vault.exists() {
+        // Écrase le coffre avant suppression (clé enveloppée).
+        if let Ok(len) = std::fs::metadata(&paths.vault).map(|m| m.len()) {
+            let _ = std::fs::write(&paths.vault, vec![0u8; len as usize]);
+        }
+    }
+    match std::fs::remove_dir_all(&paths.dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(storage(e)),
+    }
+}
+
 pub fn open(paths: &AccountPaths, password: &str) -> Result<Zeroizing<[u8; 32]>> {
     let raw = std::fs::read(&paths.vault).map_err(|_| ClientError::NoLocalAccount)?;
     let file: VaultFile = serde_json::from_slice(&raw).map_err(|e| ClientError::Storage(e.to_string()))?;

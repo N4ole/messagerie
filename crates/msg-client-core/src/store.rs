@@ -257,9 +257,12 @@ impl LocalStore {
         Ok(())
     }
 
+    /// Informations annoncées par l'administrateur. Un nom vide (conversation
+    /// directe) ne fixe que l'administrateur.
     pub fn set_group_info(&self, group_id: &[u8], name: &str, admin: &str) -> Result<()> {
         self.c().execute(
-            "UPDATE conversations SET kind = 'group', name = ?2, admin = ?3 WHERE group_id = ?1",
+            "UPDATE conversations SET kind = CASE WHEN ?2 = '' THEN kind ELSE 'group' END,
+                    name = CASE WHEN ?2 = '' THEN name ELSE ?2 END, admin = ?3 WHERE group_id = ?1",
             params![group_id, name, admin],
         )?;
         Ok(())

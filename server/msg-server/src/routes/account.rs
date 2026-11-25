@@ -18,7 +18,7 @@ use crate::passwords::{self, activation_hash, new_token, token_hash, PasswordHas
 use crate::state::AppState;
 
 /// Nombre maximal d'appareils par compte.
-const MAX_DEVICES: i64 = 10;
+pub(crate) const MAX_DEVICES: i64 = msg_proto::MAX_DEVICES_PER_ACCOUNT as i64;
 
 #[derive(sqlx::FromRow)]
 pub(crate) struct AccountRow {
@@ -27,7 +27,7 @@ pub(crate) struct AccountRow {
     password_hash: Option<String>,
     totp_secret_enc: Option<Vec<u8>>,
     totp_last_step: Option<i64>,
-    identity_key: Option<Vec<u8>>,
+    pub(crate) identity_key: Option<Vec<u8>>,
     activation_code_hash: Option<Vec<u8>>,
     activation_expires_at: Option<i64>,
     failed_logins: i32,
@@ -238,7 +238,7 @@ pub(crate) async fn check_credentials(
     Ok(acc)
 }
 
-fn check_len(v: &[u8], n: usize, what: &str) -> AppResult<()> {
+pub(crate) fn check_len(v: &[u8], n: usize, what: &str) -> AppResult<()> {
     if v.len() == n {
         Ok(())
     } else {
@@ -272,6 +272,7 @@ async fn register_device(
                 .bind(&reg.identity_key)
                 .execute(&mut **tx)
                 .await?;
+            crate::kt::mark_dirty(&mut **tx, acc.id).await?;
         }
         Some(k) if k == &reg.identity_key => {}
         Some(_) => {
@@ -311,12 +312,13 @@ async fn register_device(
             .bind(crate::now())
             .execute(&mut **tx)
             .await?;
+            crate::kt::mark_dirty(&mut **tx, acc.id).await?;
             Ok(())
         }
     }
 }
 
-async fn new_session(
+pub(crate) async fn new_session(
     st: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     device: uuid::Uuid,
@@ -366,6 +368,7 @@ pub async fn confirm_totp(
     register_device(&mut tx, &acc, &req.username, &req.device).await?;
     let s = new_session(&st, &mut tx, req.device.device_id).await?;
     tx.commit().await?;
+    super::devices::publish_now(&st).await;
     Ok(Json(s))
 }
 
@@ -386,6 +389,7 @@ pub async fn login(State(st): State<AppState>, Json(req): Json<LoginRequest>) ->
     register_device(&mut tx, &acc, &req.username, &req.device).await?;
     let s = new_session(&st, &mut tx, req.device.device_id).await?;
     tx.commit().await?;
+    super::devices::publish_now(&st).await;
     Ok(Json(s))
 }
 
