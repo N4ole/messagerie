@@ -139,6 +139,25 @@ jobs:
       - name: Desktop (natif) ↔ web (WASM dans Chromium)
         run: pnpm test:interop
 
+  tor-real:
+    name: Tor réel (amorçage arti, informatif)
+    runs-on: ubuntu-24.04
+    # Dépend du réseau Tor public : n'empêche pas la fusion en cas d'échec.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Chaîne Rust (rust-toolchain.toml)
+        run: rustup toolchain install && rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: tor
+      - name: Amorçage réel de Tor par arti
+        run: cargo test --locked -p msg-tor -- --ignored
+
   frontend:
     name: UI — typecheck, lint, tests, build
     runs-on: ubuntu-24.04

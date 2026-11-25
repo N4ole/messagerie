@@ -14,13 +14,17 @@ use uuid::Uuid;
 
 use crate::error::{ClientError, Result};
 
-/// Vérifie l'URL du serveur : HTTPS obligatoire, sauf boucle locale (développement).
+/// Vérifie l'URL du serveur : HTTPS obligatoire, sauf boucle locale
+/// (développement) et service onion (Tor chiffre et authentifie déjà la
+/// connexion de bout en bout ; une adresse `.onion` n'est joignable que par
+/// Tor).
 pub fn validate_server_url(raw: &str, allow_insecure: bool) -> Result<Url> {
     let url = Url::parse(raw.trim()).map_err(|e| ClientError::InsecureUrl(e.to_string()))?;
     let loopback = matches!(url.host_str(), Some("localhost") | Some("127.0.0.1") | Some("[::1]") | Some("::1"));
+    let onion = url.host_str().is_some_and(|h| h.ends_with(".onion"));
     match url.scheme() {
         "https" => {}
-        "http" if loopback || allow_insecure => {}
+        "http" if loopback || onion || allow_insecure => {}
         _ => return Err(ClientError::InsecureUrl("HTTPS obligatoire (HTTP accepté uniquement en local)".into())),
     }
     if url.username() != "" || url.password().is_some() || url.query().is_some() {
@@ -41,6 +45,10 @@ pub struct DeviceAuth {
 pub struct ApiClient {
     http: reqwest::Client,
     base: Url,
+    #[cfg(not(target_arch = "wasm32"))]
+    network: crate::net::Network,
+    #[cfg(not(target_arch = "wasm32"))]
+    tls: Option<std::sync::Arc<rustls::ClientConfig>>,
     device: Option<DeviceAuth>,
     tokens: Mutex<Option<SessionTokens>>,
 }
@@ -65,13 +73,36 @@ async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
 impl ApiClient {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(base: Url) -> Result<Self> {
-        let http = reqwest::Client::builder()
+        Self::with_network(base, crate::net::Network::Direct, &[])
+    }
+
+    /// Client HTTP avec itinéraire réseau et épinglage TLS. En mode Tor, le
+    /// proxy local d'arti est le **seul** itinéraire (proxys système
+    /// ignorés, noms résolus par Tor) : aucune connexion directe possible.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_network(base: Url, network: crate::net::Network, pins: &[[u8; 32]]) -> Result<Self> {
+        let mut b = reqwest::Client::builder()
             .user_agent("messagerie")
             .timeout(std::time::Duration::from_secs(120))
             .redirect(reqwest::redirect::Policy::none())
             .https_only(base.scheme() == "https")
-            .build()?;
-        Ok(Self { http, base, device: None, tokens: Mutex::new(None) })
+            .no_proxy();
+        if let crate::net::Network::TorStrict(p) = &network {
+            // Identifiants SOCKS (RFC 1929) dans l'URL du proxy ; `socks5h` :
+            // résolution des noms par Tor, aucune requête DNS locale.
+            let mut url =
+                Url::parse(&format!("socks5h://{}", p.addr)).map_err(|e| ClientError::Invalid(e.to_string()))?;
+            url.set_username(&p.username).map_err(|_| ClientError::Invalid("proxy".into()))?;
+            url.set_password(Some(&p.password)).map_err(|_| ClientError::Invalid("proxy".into()))?;
+            let proxy = reqwest::Proxy::all(url.as_str()).map_err(|e| ClientError::Invalid(e.to_string()))?;
+            b = b.proxy(proxy);
+        }
+        let tls = crate::net::pinned_tls(pins)?.map(std::sync::Arc::new);
+        if let Some(cfg) = &tls {
+            b = b.use_preconfigured_tls((**cfg).clone());
+        }
+        let http = b.build()?;
+        Ok(Self { http, base, network, tls, device: None, tokens: Mutex::new(None) })
     }
 
     /// Navigateur : `fetch` (TLS, délais et politique de redirection sont
@@ -426,7 +457,19 @@ impl ApiClient {
         hm.insert(headers::NONCE, hv(h.nonce)?);
         hm.insert(headers::SIGNATURE, hv(h.signature)?);
         hm.insert("authorization", hv(format!("Bearer {}", t.access_token))?);
-        let (ws, _) = tokio_tungstenite::connect_async(req).await.map_err(|e| ClientError::Network(e.to_string()))?;
+        let connector = self.tls.clone().map(tokio_tungstenite::Connector::Rustls);
+        let (ws, _) = match &self.network {
+            crate::net::Network::Direct => {
+                tokio_tungstenite::connect_async_tls_with_config(req, None, false, connector).await
+            }
+            crate::net::Network::TorStrict(p) => {
+                let host = url.host_str().ok_or_else(|| ClientError::Invalid("hôte".into()))?;
+                let port = url.port_or_known_default().ok_or_else(|| ClientError::Invalid("port".into()))?;
+                let stream = crate::net::socks_connect(p, host, port).await?;
+                tokio_tungstenite::client_async_tls_with_config(req, stream, None, connector).await
+            }
+        }
+        .map_err(|e| ClientError::Network(e.to_string()))?;
         Ok(ws)
     }
 }
@@ -441,6 +484,9 @@ mod tests {
         assert!(validate_server_url("http://127.0.0.1:8080", false).is_ok());
         assert!(validate_server_url("http://localhost:8080", false).is_ok());
         assert!(validate_server_url("http://msg.example.org", false).is_err());
+        let onion = "http://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvw.onion";
+        assert!(validate_server_url(onion, false).is_ok(), "service onion sans TLS");
+        assert!(validate_server_url("http://exemple.onion.example.org", false).is_err());
         assert!(validate_server_url("http://msg.example.org", true).is_ok());
         assert!(validate_server_url("https://user:pw@msg.example.org", false).is_err());
         assert!(validate_server_url("ftp://msg.example.org", false).is_err());

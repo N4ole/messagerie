@@ -15,6 +15,8 @@ pub mod devices;
 pub mod error;
 pub mod kt;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod net;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod passkey;
 pub mod store;
 pub mod store_mem;

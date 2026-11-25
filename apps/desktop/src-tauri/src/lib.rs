@@ -42,6 +42,10 @@ struct AppState {
     capture_protection: std::sync::Mutex<String>,
     /// Liaison de cet appareil en attente d'approbation.
     pending_link: Mutex<Option<(Arc<PendingLink>, ClientConfig)>>,
+    /// Itinéraire réseau choisi et empreintes TLS épinglées.
+    network: Mutex<(msg_client_core::net::Network, Vec<[u8; 32]>)>,
+    /// Tor embarqué (démarré à la demande, conservé ensuite).
+    tor: Mutex<Option<msg_tor::TorRuntime>>,
 }
 
 impl Default for AppState {
@@ -54,6 +58,8 @@ impl Default for AppState {
             hwnd: AtomicIsize::new(0),
             capture_protection: std::sync::Mutex::new("indisponible".into()),
             pending_link: Mutex::new(None),
+            network: Mutex::new((msg_client_core::net::Network::Direct, Vec::new())),
+            tor: Mutex::new(None),
         }
     }
 }
@@ -136,7 +142,53 @@ struct SecurityStatus {
 
 fn config(app: &AppHandle, server: &str) -> CmdResult<ClientConfig> {
     let dir = app.path().app_data_dir().map_err(|e| err("error", format!("dossier de données : {e}")))?;
-    Ok(ClientConfig::new(server.trim().trim_end_matches('/'), dir))
+    let mut cfg = ClientConfig::new(server.trim().trim_end_matches('/'), dir);
+    let state = app.state::<AppState>();
+    let (network, pins) = state.network.try_lock().map(|g| g.clone()).map_err(|_| err("error", "réseau occupé"))?;
+    cfg.network = network;
+    cfg.tls_pins = pins;
+    Ok(cfg)
+}
+
+/// Choisit l'itinéraire réseau avant toute connexion : `direct` ou `tor`
+/// (mode strict : arti embarqué, aucune connexion directe). `pins` :
+/// empreintes SHA-256 (hexadécimal) de la clé publique TLS du serveur.
+#[tauri::command]
+async fn configure_network(
+    mode: String,
+    pins: Vec<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let pins = pins
+        .iter()
+        .map(|p| {
+            let clean: String = p.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+            hex::decode(&clean)
+                .ok()
+                .and_then(|v| <[u8; 32]>::try_from(v).ok())
+                .ok_or_else(|| err("error", "empreinte TLS invalide (SHA-256 en hexadécimal, 64 caractères)"))
+        })
+        .collect::<CmdResult<Vec<_>>>()?;
+    let (network, label) = match mode.as_str() {
+        "direct" => (msg_client_core::net::Network::Direct, "connexion directe".to_string()),
+        "tor" => {
+            let mut tor = state.tor.lock().await;
+            if tor.is_none() {
+                let base = app.path().app_data_dir().map_err(|e| err("error", e.to_string()))?.join("tor");
+                let rt = msg_tor::TorRuntime::start(&base.join("state"), &base.join("cache"))
+                    .await
+                    .map_err(|e| err("tor_unavailable", format!("{e}. Aucune connexion directe n'a été tentée.")))?;
+                *tor = Some(rt);
+            }
+            let p = tor.as_ref().map(|t| t.proxy()).ok_or_else(|| err("tor_unavailable", "Tor indisponible"))?;
+            let proxy = msg_client_core::net::TorProxy { addr: p.addr, username: p.username, password: p.password };
+            (msg_client_core::net::Network::TorStrict(proxy), "Tor (mode strict)".to_string())
+        }
+        _ => return Err(err("error", "mode réseau inconnu")),
+    };
+    *state.network.lock().await = (network, pins);
+    Ok(label)
 }
 
 async fn current(state: &State<'_, AppState>) -> CmdResult<Shared> {
@@ -779,6 +831,7 @@ pub fn run() {
             safety_number,
             verify_safety_number,
             accept_identity_change,
+            configure_network,
             link_start,
             link_poll,
             devices,

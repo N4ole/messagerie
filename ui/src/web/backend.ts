@@ -186,6 +186,15 @@ export function createWebBackend(app: WebAppApi, kv: SyncKv, opts: WebOptions = 
 
   return {
     platform: "web",
+    configureNetwork: async (mode) => {
+      if (mode === "tor") {
+        throw {
+          kind: "unsupported",
+          message: "Tor ne peut pas être embarqué dans une page web : ouvrez l'adresse .onion du site dans Tor Browser.",
+        };
+      }
+      return "connexion du navigateur (même origine)";
+    },
     activate: (_server, u, code, pw) => app.activate(u, code, pw) as Promise<Activation>,
     enroll: async (_server, u, pw, totp) => start(await persist<Session>(app.enroll(u, pw, totp))),
     login: async (_server, u, pw, totp) => start(await persist<Session>(app.login(u, pw, totp))),

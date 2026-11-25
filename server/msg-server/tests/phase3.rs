@@ -180,3 +180,61 @@ async fn key_transparency_detects_unpublished_and_substituted_keys() {
     let st3 = msg_server::AppState::try_new(s.pool.clone(), s.server_cfg.clone()).unwrap();
     assert!(msg_server::kt::head(&st3).await.is_err());
 }
+
+/// Simule Tor : relais direct qui compte les connexions passées par le proxy.
+struct CountingDialer(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl msg_tor::Dialer for CountingDialer {
+    async fn dial(&self, host: &str, port: u16) -> std::io::Result<Box<dyn msg_tor::Stream>> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Box::new(tokio::net::TcpStream::connect((host, port)).await?))
+    }
+}
+
+fn tor(p: msg_tor::SocksProxy) -> msg_client_core::net::Network {
+    msg_client_core::net::Network::TorStrict(msg_client_core::net::TorProxy {
+        addr: p.addr,
+        username: p.username,
+        password: p.password,
+    })
+}
+
+/// Mode Tor strict : tout le trafic (HTTP et WebSocket) passe par le proxy
+/// SOCKS d'arti ; sans proxy joignable, aucune connexion directe n'est tentée.
+#[tokio::test(flavor = "multi_thread")]
+async fn tor_strict_mode_routes_everything_through_the_proxy() {
+    let mut s = spawn().await;
+    let admin = s.admin().await;
+    let (mut bob, _, _) = s.user(&admin, "bob").await;
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let rt = msg_tor::TorRuntime::with_dialer(CountingDialer(count.clone())).await.unwrap();
+
+    let r = admin.api().admin_create("alice", msg_proto::Role::User).await.unwrap();
+    let mut cfg = s.config();
+    cfg.network = tor(rt.proxy());
+    let act = Client::activate(&cfg, "alice", &r.activation_code, password()).await.unwrap();
+    let mut alice = Client::enroll(&cfg, "alice", password(), &totp_code(&act.totp_secret_base32, 0)).await.unwrap();
+    let conv = alice.start_conversation("bob").await.unwrap();
+    alice.send_text(&conv.id, "via Tor").await.unwrap();
+    let before = count.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(before > 0, "requêtes HTTP passées par le proxy");
+    let _ws = alice.api().connect_ws().await.unwrap();
+    assert!(count.load(std::sync::atomic::Ordering::SeqCst) > before, "WebSocket passé par le proxy");
+    bob.sync().await.unwrap();
+    assert_eq!(bob.messages(&conv.id, 10).unwrap()[0].text, "via Tor");
+
+    // Tor indisponible : échec réseau, jamais de repli direct.
+    drop(rt);
+    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
+    let mut down = cfg.clone();
+    down.network = msg_client_core::net::Network::TorStrict(msg_client_core::net::TorProxy {
+        addr: closed,
+        username: "u".into(),
+        password: "p".to_string().into(),
+    });
+    let err = Client::login(&down, "alice", password(), None).await.err().expect("échec attendu");
+    assert!(matches!(err, ClientError::Network(_)), "{err:?}");
+    let err = down.api_for_tests().unwrap().health().await.unwrap_err();
+    assert!(matches!(err, ClientError::Network(_)), "{err:?}");
+}

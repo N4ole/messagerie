@@ -1,15 +1,33 @@
 # Image du serveur : compilation multi-étapes, exécution sur une base
-# distroless sans shell, en utilisateur non privilégié.
+# distroless sans shell, en utilisateur non privilégié. Le client web
+# (module WASM + interface) est servi par le serveur lui-même (même origine).
 FROM rust:1.97-bookworm AS build
 WORKDIR /src
 COPY . .
+RUN cargo install wasm-bindgen-cli --version 0.2.130 --locked
 RUN cargo build --release --locked -p msg-server \
  && cp target/release/msg-server /msg-server
+RUN RUSTFLAGS='--cfg getrandom_backend="wasm_js"' \
+    cargo build --release --locked --target wasm32-unknown-unknown -p msg-wasm \
+ && wasm-bindgen --target web --out-dir ui/src/wasm-pkg --out-name msg_wasm \
+    target/wasm32-unknown-unknown/release/msg_wasm.wasm
+
+FROM node:22-bookworm-slim AS web
+WORKDIR /src
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY ui ./ui
+COPY apps/desktop/package.json ./apps/desktop/package.json
+COPY tests/interop/package.json ./tests/interop/package.json
+COPY --from=build /src/ui/src/wasm-pkg ./ui/src/wasm-pkg
+RUN pnpm install --frozen-lockfile --filter @messagerie/ui \
+ && pnpm --filter @messagerie/ui exec vite build --mode web
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /msg-server /usr/local/bin/msg-server
+COPY --from=web /src/ui/dist-web /srv/web
 USER nonroot:nonroot
 EXPOSE 8080
-ENV MSG_BIND=0.0.0.0:8080 MSG_LOG_JSON=1
+ENV MSG_BIND=0.0.0.0:8080 MSG_LOG_JSON=1 MSG_WEB_DIR=/srv/web
 ENTRYPOINT ["/usr/local/bin/msg-server"]
 CMD ["serve"]

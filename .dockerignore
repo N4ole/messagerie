@@ -6,3 +6,5 @@ ui/dist
 spikes/*/target
 *.db
 .env
+ui/dist-web
+ui/src/wasm-pkg

@@ -26,6 +26,7 @@ function b64url(s: string): string {
 
 export const tauriBackend: Backend = {
   platform: "desktop",
+  configureNetwork: (mode, pins) => invoke<string>("configure_network", { mode, pins }),
   activate: (server, username, code, password) =>
     invoke<Activation>("activate", { server, username, code, password }),
   enroll: (server, username, password, totp) => invoke<Session>("enroll", { server, username, password, totp }),

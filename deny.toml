@@ -50,6 +50,9 @@ allow = [
   "BSL-1.0",
   "CDLA-Permissive-2.0",
   "MPL-2.0",
+  # Dédicace au domaine public (approuvée OSI), compatible MIT :
+  # async_executors, dépendance d'arti (Tor).
+  "Unlicense",
 ]
 
 [bans]

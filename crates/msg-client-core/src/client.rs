@@ -50,6 +50,12 @@ pub struct ClientConfig {
     pub argon2: Argon2Params,
     /// Autorise HTTP hors boucle locale (tests uniquement).
     pub allow_insecure_http: bool,
+    /// Desktop : itinéraire réseau (direct, ou Tor en mode strict).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub network: crate::net::Network,
+    /// Desktop : empreintes SHA-256 épinglées de la clé publique du serveur.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub tls_pins: Vec<[u8; 32]>,
     /// Navigateur : stockage clé-valeur de l'hôte (IndexedDB).
     #[cfg(target_arch = "wasm32")]
     pub kv: Option<std::rc::Rc<dyn crate::account::KvStore>>,
@@ -68,13 +74,26 @@ impl ClientConfig {
             data_dir: data_dir.into(),
             argon2: Argon2Params::PRODUCTION,
             allow_insecure_http: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            network: crate::net::Network::Direct,
+            #[cfg(not(target_arch = "wasm32"))]
+            tls_pins: Vec::new(),
             #[cfg(target_arch = "wasm32")]
             kv: None,
         }
     }
 
+    /// Client HTTP selon cette configuration (outillage de test).
+    pub fn api_for_tests(&self) -> Result<ApiClient> {
+        self.api()
+    }
+
     pub(crate) fn api(&self) -> Result<ApiClient> {
-        ApiClient::new(validate_server_url(&self.server_url, self.allow_insecure_http)?)
+        let url = validate_server_url(&self.server_url, self.allow_insecure_http)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        return ApiClient::with_network(url, self.network.clone(), &self.tls_pins);
+        #[cfg(target_arch = "wasm32")]
+        ApiClient::new(url)
     }
 
     #[cfg(not(target_arch = "wasm32"))]

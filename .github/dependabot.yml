@@ -31,3 +31,10 @@ updates:
     groups:
       docker:
         patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /deploy/tor
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 5
+    groups:
+      docker-tor:
+        patterns: ["*"]

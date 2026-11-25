@@ -5,7 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    paths: ["server/**", "crates/**", "deploy/docker/**", "Cargo.lock"]
+    paths: ["server/**", "crates/**", "ui/**", "deploy/docker/**", "Cargo.lock", "pnpm-lock.yaml"]
 
 permissions: {}
 

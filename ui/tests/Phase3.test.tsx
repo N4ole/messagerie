@@ -164,3 +164,35 @@ describe("Backend web", () => {
     expect((await b.securityStatus()).passkeysSupported).toBe(false);
   });
 });
+
+describe("Réseau (desktop)", () => {
+  it("configure Tor strict et l'épinglage avant la connexion", async () => {
+    const b = mockBackend();
+    withBackend(b, <Auth onSession={vi.fn()} />);
+    await userEvent.click(screen.getByLabelText(/Tor, mode strict/));
+    await userEvent.type(screen.getByLabelText(/Empreinte TLS/), "ab".repeat(32));
+    await userEvent.type(screen.getByLabelText("Serveur"), "https://srv.onion");
+    await userEvent.type(screen.getByLabelText("Identifiant"), "alice");
+    await userEvent.type(screen.getByLabelText("Mot de passe"), "motdepasse-long");
+    await userEvent.click(screen.getByRole("button", { name: "Se connecter" }));
+    await waitFor(() => expect(b.login).toHaveBeenCalled());
+    expect(b.configureNetwork).toHaveBeenCalledWith("tor", ["ab".repeat(32)]);
+    expect(await screen.findByText(/Réseau : Tor \(mode strict\)/)).toBeInTheDocument();
+  });
+
+  it("Tor indisponible : aucune tentative de connexion", async () => {
+    const b = mockBackend({
+      configureNetwork: vi.fn(async () =>
+        Promise.reject({ kind: "tor_unavailable", message: "Tor indisponible. Aucune connexion directe n'a été tentée." }),
+      ),
+    });
+    withBackend(b, <Auth onSession={vi.fn()} />);
+    await userEvent.click(screen.getByLabelText(/Tor, mode strict/));
+    await userEvent.type(screen.getByLabelText("Serveur"), "https://srv.onion");
+    await userEvent.type(screen.getByLabelText("Identifiant"), "alice");
+    await userEvent.type(screen.getByLabelText("Mot de passe"), "motdepasse-long");
+    await userEvent.click(screen.getByRole("button", { name: "Se connecter" }));
+    expect(await screen.findByText(/Aucune connexion directe/)).toBeInTheDocument();
+    expect(b.login).not.toHaveBeenCalled();
+  });
+});

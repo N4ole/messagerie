@@ -147,3 +147,15 @@ select { font: inherit; color: var(--text); background: var(--panel); border: 1p
 body.veiled #root {
   filter: blur(12px);
 }
+
+fieldset.network {
+  border: 1px solid var(--border, #ccc);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  margin: 0 0 0.75rem;
+}
+fieldset.network label.inline {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}

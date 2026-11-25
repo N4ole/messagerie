@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "safety_number",
     "verify_safety_number",
     "accept_identity_change",
+    "configure_network",
     "link_start",
     "link_poll",
     "devices",

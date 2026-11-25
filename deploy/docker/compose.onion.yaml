@@ -1,0 +1,59 @@
+# Déploiement « Tor uniquement » : le serveur n'est publié QUE comme service
+# onion v3 (aucun port ouvert sur l'hôte) ; le client web refuse de
+# fonctionner hors de l'adresse .onion (MSG_WEB_ONION_ONLY).
+#
+# Usage :
+#   MSG_SERVER_SECRET=$(openssl rand -hex 32) POSTGRES_PASSWORD=$(openssl rand -hex 16) \
+#     docker compose -f deploy/docker/compose.onion.yaml up -d --build
+#   docker compose -f deploy/docker/compose.onion.yaml exec tor cat /var/lib/tor/messagerie/hostname
+name: messagerie-onion
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: messagerie
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?définir POSTGRES_PASSWORD}
+      POSTGRES_DB: messagerie
+    volumes: [db:/var/lib/postgresql/data]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "messagerie"]
+      interval: 5s
+      retries: 20
+  server:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.server
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://messagerie:${POSTGRES_PASSWORD}@db:5432/messagerie
+      MSG_SERVER_SECRET: ${MSG_SERVER_SECRET:?définir MSG_SERVER_SECRET (openssl rand -hex 32)}
+      MSG_SITE_NAME: ${MSG_SITE_NAME:-messagerie}
+      MSG_WEB_ONION_ONLY: "1"
+    networks:
+      internal:
+        ipv4_address: 172.28.0.10
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  tor:
+    build:
+      context: ../tor
+    depends_on: [server]
+    volumes: [onion:/var/lib/tor/messagerie]
+    # Tor doit joindre le réseau Tor : seul service avec accès sortant.
+    networks: [internal, outside]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+networks:
+  internal:
+    internal: true
+    ipam:
+      config: [{ subnet: 172.28.0.0/24 }]
+  outside: {}
+volumes:
+  db:
+  onion:

@@ -20,6 +20,13 @@ import type {
  */
 export interface Backend {
   readonly platform: "desktop" | "web";
+  /**
+   * Itinéraire réseau, à choisir avant toute connexion : `direct` ou `tor`
+   * (mode strict : Tor embarqué, aucune connexion directe en cas d'échec).
+   * `pins` : empreintes SHA-256 de la clé publique TLS du serveur.
+   * Renvoie une description de l'itinéraire actif.
+   */
+  configureNetwork(mode: "direct" | "tor", pins: string[]): Promise<string>;
   activate(server: string, username: string, code: string, password: string): Promise<Activation>;
   enroll(server: string, username: string, password: string, totp: string): Promise<Session>;
   login(server: string, username: string, password: string, totp: string | null): Promise<Session>;

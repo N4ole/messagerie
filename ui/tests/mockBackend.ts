@@ -72,6 +72,7 @@ export function mockBackend(
   const conv = conversation();
   const b: Backend = {
     platform: "desktop",
+    configureNetwork: vi.fn(async (mode: "direct" | "tor") => (mode === "tor" ? "Tor (mode strict)" : "connexion directe")),
     activate: vi.fn(async () => ({
       totp_secret_base32: "JBSWY3DP",
       otpauth_uri: "otpauth://x",
