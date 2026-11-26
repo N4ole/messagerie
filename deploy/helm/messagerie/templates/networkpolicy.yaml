@@ -1,0 +1,38 @@
+{{- if .Values.networkPolicy.enabled }}
+# Entrées : Ingress (HTTP) et supervision (métriques) uniquement.
+# Sorties : DNS, PostgreSQL et sites pairs de la fédération uniquement.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "messagerie.fullname" . }}
+  labels: {{- include "messagerie.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "messagerie.selector" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace }} }
+      ports: [{ port: 8080 }]
+    {{- if .Values.metrics.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.metrics.allowedNamespace }} }
+      ports: [{ port: {{ .Values.metrics.port }} }]
+    {{- end }}
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to:
+        - podSelector:
+            matchLabels: { cnpg.io/cluster: {{ include "messagerie.fullname" . }}-db }
+      ports: [{ port: 5432 }]
+    {{- range .Values.federation.egressCIDRs }}
+    - to: [{ ipBlock: { cidr: {{ . }} } }]
+      ports: [{ port: 443 }]
+    {{- end }}
+{{- end }}

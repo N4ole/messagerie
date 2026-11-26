@@ -33,7 +33,18 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/auth/link/start", post(devices::link_start))
         .route("/v1/auth/link/poll", post(devices::link_poll))
         .route("/v1/ws/connect", get(ws::connect_with_ticket))
-        .route("/web-config.json", get(web::config));
+        .route("/web-config.json", get(web::config))
+        .route("/v1/site", get(crate::federation::routes::site));
+
+    use crate::federation::routes as fed;
+    let federation = Router::new()
+        .route("/v1/federation/users/{user}", get(fed::directory))
+        .route("/v1/federation/users/{user}/claim", post(fed::claim))
+        .route("/v1/federation/deliver", post(fed::deliver))
+        .route("/v1/federation/attachments/{id}", get(fed::attachment))
+        .route("/v1/federation/kt/head", get(fed::kt_head))
+        .route("/v1/federation/kt/audit", get(fed::kt_audit))
+        .route_layer(from_fn_with_state(st.clone(), fed::authenticate));
 
     let signed = Router::new()
         .route("/v1/auth/refresh", post(account::refresh))
@@ -74,7 +85,7 @@ pub fn router(st: AppState) -> Router {
         .route("/v1/admin/accounts/{username}/devices/{device_id}", delete(admin::revoke_device))
         .route_layer(from_fn_with_state(st.clone(), authenticated));
 
-    let router = Router::new().merge(public).merge(signed).merge(protected);
+    let router = Router::new().merge(public).merge(signed).merge(protected).merge(federation);
     // Client web (facultatif) : fichiers statiques servis à la racine.
     let router = match st.cfg().web_dir.clone() {
         Some(dir) => router.fallback_service(web::static_files(dir)),
@@ -83,6 +94,7 @@ pub fn router(st: AppState) -> Router {
     router
         .layer(axum::middleware::from_fn(web::security_headers))
         .layer(axum::middleware::from_fn(crate::logging::access_log))
+        .layer(from_fn_with_state(st.clone(), crate::metrics::track))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(st)
 }

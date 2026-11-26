@@ -34,6 +34,56 @@ pub struct Config {
     pub web_dir: Option<std::path::PathBuf>,
     /// Client web en mode Tor strict (refus hors adresse `.onion`).
     pub web_onion_only: bool,
+    /// Fédération : sites autorisés (liste blanche, clés épinglées).
+    pub federation_peers: Vec<FederationPeer>,
+    /// Fédération : proxy SOCKS pour joindre les sites (ex. Tor :
+    /// `socks5h://127.0.0.1:9050`), obligatoire pour les adresses `.onion`.
+    pub federation_proxy: Option<String>,
+    /// Jeton porteur facultatif exigé par `/metrics` (`MSG_METRICS_TOKEN`).
+    pub metrics_token: Option<String>,
+}
+
+/// Site pair de la liste blanche.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct FederationPeer {
+    /// Nom du site (partie après `@` des adresses).
+    pub name: String,
+    /// URL de base de son API (HTTPS, ou HTTP pour une adresse `.onion`).
+    pub url: String,
+    /// Clé publique Ed25519 de fédération (64 caractères hexadécimaux).
+    #[serde(with = "hex_key")]
+    pub public_key: [u8; 32],
+}
+
+mod hex_key {
+    use serde::{Deserialize, Deserializer};
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
+        let s = String::deserialize(d)?;
+        let v = hex::decode(s.trim()).map_err(serde::de::Error::custom)?;
+        v.try_into().map_err(|_| serde::de::Error::custom("clé de 32 octets attendue"))
+    }
+}
+
+/// Lit et valide la liste blanche (fichier JSON : tableau de sites).
+pub fn load_peers(json: &str, own_site: &str) -> anyhow::Result<Vec<FederationPeer>> {
+    let peers: Vec<FederationPeer> = serde_json::from_str(json).context("liste blanche de fédération invalide")?;
+    let mut seen = std::collections::HashSet::new();
+    for p in &peers {
+        msg_proto::validate_site(&p.name).map_err(|e| anyhow::anyhow!("site « {} » : {e}", p.name))?;
+        if p.name == own_site {
+            bail!("la liste blanche ne doit pas contenir ce site");
+        }
+        if !seen.insert(p.name.clone()) {
+            bail!("site « {} » en double", p.name);
+        }
+        let u = url::Url::parse(&p.url).with_context(|| format!("URL du site « {} »", p.name))?;
+        let onion = u.host_str().is_some_and(|h| h.ends_with(".onion"));
+        if !(u.scheme() == "https" || (u.scheme() == "http" && onion)) {
+            bail!("site « {} » : HTTPS obligatoire (HTTP accepté pour .onion)", p.name);
+        }
+    }
+    Ok(peers)
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +95,21 @@ pub struct WebauthnConfig {
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config").field("site_name", &self.site_name).finish_non_exhaustive()
+    }
+}
+
+/// Lit un secret depuis `NOM` ou, à défaut, depuis le fichier `NOM_FILE`
+/// (Docker secrets, Kubernetes, systemd `LoadCredential`).
+pub fn secret_env(name: &str) -> anyhow::Result<Option<Zeroizing<String>>> {
+    if let Ok(v) = std::env::var(name) {
+        return Ok(Some(Zeroizing::new(v)));
+    }
+    match std::env::var_os(format!("{name}_FILE")) {
+        Some(path) => {
+            let v = std::fs::read_to_string(&path).with_context(|| format!("{name}_FILE illisible"))?;
+            Ok(Some(Zeroizing::new(v.trim_end_matches(['\n', '\r']).to_owned())))
+        }
+        None => Ok(None),
     }
 }
 
@@ -76,14 +141,16 @@ impl Config {
             webauthn: None,
             web_dir: None,
             web_onion_only: false,
+            federation_peers: Vec::new(),
+            federation_proxy: None,
+            metrics_token: None,
         }
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
-        let secret_hex = Zeroizing::new(
-            std::env::var("MSG_SERVER_SECRET")
-                .context("MSG_SERVER_SECRET manquant (64 caractères hexadécimaux, ex. `openssl rand -hex 32`)")?,
-        );
+        let secret_hex = secret_env("MSG_SERVER_SECRET")?.context(
+            "MSG_SERVER_SECRET (ou MSG_SERVER_SECRET_FILE) manquant (64 caractères hexadécimaux, ex. `openssl rand -hex 32`)",
+        )?;
         let bytes = Zeroizing::new(hex::decode(secret_hex.trim()).context("MSG_SERVER_SECRET : hexadécimal attendu")?);
         if bytes.len() != 32 {
             bail!("MSG_SERVER_SECRET doit faire 32 octets (64 caractères hexadécimaux)");
@@ -109,11 +176,38 @@ impl Config {
             (Err(_), Err(_)) => None,
             _ => bail!("MSG_WEBAUTHN_RP_ID et MSG_WEBAUTHN_ORIGIN doivent être définis ensemble"),
         };
+        msg_proto::validate_site(&c.site_name).map_err(|e| anyhow::anyhow!("MSG_SITE_NAME : {e}"))?;
+        if let Some(path) = std::env::var_os("MSG_FEDERATION_PEERS") {
+            let json = std::fs::read_to_string(&path).context("MSG_FEDERATION_PEERS illisible")?;
+            c.federation_peers = load_peers(&json, &c.site_name)?;
+        }
+        c.federation_proxy = std::env::var("MSG_FEDERATION_PROXY").ok().filter(|s| !s.is_empty());
+        c.metrics_token = secret_env("MSG_METRICS_TOKEN")?.map(|t| t.to_string()).filter(|s| !s.is_empty());
         c.web_dir = std::env::var_os("MSG_WEB_DIR").map(Into::into);
         c.web_onion_only = matches!(std::env::var("MSG_WEB_ONION_ONLY").as_deref(), Ok("1" | "true"));
         if c.access_ttl_secs <= 0 || c.session_ttl_secs < c.access_ttl_secs {
             bail!("durées de session incohérentes");
         }
         Ok(c)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::secret_env;
+
+    #[test]
+    fn secrets_are_read_from_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret");
+        std::fs::write(&path, "valeur-du-fichier\n").unwrap();
+        // Noms propres à ce test : aucune autre lecture concurrente.
+        std::env::set_var("MSG_TEST_SECRET_FILE", &path);
+        assert_eq!(secret_env("MSG_TEST_SECRET").unwrap().unwrap().as_str(), "valeur-du-fichier");
+        std::env::set_var("MSG_TEST_SECRET", "valeur-directe");
+        assert_eq!(secret_env("MSG_TEST_SECRET").unwrap().unwrap().as_str(), "valeur-directe");
+        assert!(secret_env("MSG_TEST_ABSENT").unwrap().is_none());
+        std::env::set_var("MSG_TEST_MISSING_FILE", dir.path().join("absent"));
+        assert!(secret_env("MSG_TEST_MISSING").is_err());
     }
 }

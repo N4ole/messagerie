@@ -18,11 +18,13 @@
 - [Phase 1 — MVP](phases/phase-1.md)
 - [Phase 2 — Sécurité avancée](phases/phase-2.md)
 - [Phase 3 — Réseau et web](phases/phase-3.md)
+- [Phase 4 — Multi-site et infrastructure](phases/phase-4.md)
 
 # Guides
 
 - [Développement](guides/developpement.md)
 - [Administration](guides/administration.md)
+- [Production, fédération, supervision, sauvegardes](guides/production.md)
 - [Configuration de GitHub](guides/github-setup.md)
 - [Recette Windows](guides/recette-windows.md)
 

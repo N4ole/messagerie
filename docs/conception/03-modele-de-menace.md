@@ -46,7 +46,7 @@ flowchart TB
     FED["msg-server distant"]
   end
   CORE --> NET --> API
-  API <-->|mTLS liste blanche| FED
+  API <-->|requêtes signées, liste blanche| FED
 ```
 
 ## 4. Analyse STRIDE par composant
@@ -104,7 +104,7 @@ Légende statut : ✅ traité · ⚠️ partiellement (limite documentée) · �
 
 | STRIDE | Menace | Contre-mesure | Statut |
 |---|---|---|---|
-| S | Serveur non autorisé | mTLS + clé publique épinglée par site (liste blanche) | ✅ |
+| S | Serveur non autorisé | Requêtes et réponses signées par la clé épinglée du site (liste blanche), nonce à usage unique (ADR-0009 révisé) | ✅ |
 | S | Site A usurpe des utilisateurs du site B | Un site ne peut annoncer que des identités de son domaine ; vérif. KT croisée | ✅ |
 | T | Site relais modifie les messages | Chiffrement de bout en bout (le relais ne voit que des blobs) | ✅ |
 | D | Site injoignable | File store-and-forward persistante avec ré-émission | ✅ |

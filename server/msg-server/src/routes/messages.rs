@@ -32,8 +32,22 @@ pub async fn send(
     let mut recipients = req.recipients.clone();
     recipients.sort();
     recipients.dedup();
-    if recipients.is_empty() || recipients.len() > MAX_RECIPIENTS {
+    let remote_count: usize = req.remote.iter().map(|r| r.devices.len()).sum();
+    if (recipients.is_empty() && remote_count == 0) || recipients.len() + remote_count > MAX_RECIPIENTS {
         return Err(AppError::bad_request("destinataires invalides"));
+    }
+    // Destinataires d'autres sites : file de fédération (store-and-forward).
+    for r in &req.remote {
+        if r.site == st.cfg().site_name || r.devices.is_empty() {
+            return Err(AppError::bad_request("destinataires distants invalides"));
+        }
+        crate::federation::peer(&st, &r.site)?;
+    }
+    for r in &req.remote {
+        crate::federation::outbox::enqueue(&st, &r.site, req.client_message_id, &r.devices, &req.payload).await?;
+    }
+    if recipients.is_empty() {
+        return Ok(Json(SendResponse { accepted: remote_count }));
     }
     let mut tx = st.db().begin().await?;
     // Les appareils révoqués (encore membres d'un groupe jusqu'au commit de
@@ -42,6 +56,9 @@ pub async fn send(
         sqlx::query_as("SELECT id FROM devices WHERE id = ANY($1)").bind(&recipients).fetch_all(&mut *tx).await?;
     let recipients: Vec<Uuid> = known.into_iter().map(|(d,)| d).collect();
     if recipients.is_empty() {
+        if remote_count > 0 {
+            return Ok(Json(SendResponse { accepted: remote_count }));
+        }
         return Err(AppError::bad_request("appareil destinataire inconnu"));
     }
     let blob: Option<(i64,)> = sqlx::query_as(
@@ -68,9 +85,7 @@ pub async fn send(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    for r in &recipients {
-        let _ = st.inner.hub.send(*r);
-    }
+    crate::notify::deliveries(&st, &recipients).await;
     Ok(Json(SendResponse { accepted: recipients.len() }))
 }
 

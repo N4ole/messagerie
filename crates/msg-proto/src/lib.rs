@@ -22,6 +22,9 @@ pub mod headers {
     pub const NONCE: &str = "x-msg-nonce";
     pub const SIGNATURE: &str = "x-msg-signature";
     pub const DEVICE: &str = "x-msg-device";
+    /// Fédération : site émetteur d'une requête, signature d'une réponse.
+    pub const SITE: &str = "x-msg-site";
+    pub const SITE_RESPONSE_SIGNATURE: &str = "x-msg-site-response";
 }
 
 /// Fenêtre d'acceptation des horodatages de requête (secondes).
@@ -50,6 +53,35 @@ pub fn validate_username(username: &str) -> Result<(), &'static str> {
         return Err("l'identifiant doit commencer par une lettre ou un chiffre");
     }
     Ok(())
+}
+
+/// Nom de site (fédération) : 1 à 63 caractères a-z, 0-9, '.', '-' ;
+/// commence et finit par une lettre ou un chiffre.
+pub fn validate_site(site: &str) -> Result<(), &'static str> {
+    let b = site.as_bytes();
+    if b.is_empty() || b.len() > 63 {
+        return Err("nom de site : 1 à 63 caractères");
+    }
+    if !b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'.' || *c == b'-') {
+        return Err("nom de site : caractères a-z, 0-9, '.', '-'");
+    }
+    if !b[0].is_ascii_alphanumeric() || !b[b.len() - 1].is_ascii_alphanumeric() {
+        return Err("nom de site : doit commencer et finir par une lettre ou un chiffre");
+    }
+    Ok(())
+}
+
+/// Adresse d'un utilisateur : `identifiant` (site courant) ou
+/// `identifiant@site`. Renvoie (identifiant, site éventuel).
+pub fn parse_address(address: &str) -> Result<(&str, Option<&str>), &'static str> {
+    match address.split_once('@') {
+        None => validate_username(address).map(|_| (address, None)),
+        Some((user, site)) => {
+            validate_username(user)?;
+            validate_site(site)?;
+            Ok((user, Some(site)))
+        }
+    }
 }
 
 /// Politique minimale de mot de passe (longueur ; la robustesse réelle est
@@ -507,12 +539,22 @@ pub const KT_MAX_AUDIT_EPOCHS: u64 = 2000;
 // Distribution des messages (delivery service)
 // ---------------------------------------------------------------------------
 
+/// Appareils destinataires hébergés par un autre site (fédération).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteRecipients {
+    pub site: String,
+    pub devices: Vec<Uuid>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendRequest {
     /// Identifiant choisi par le client (idempotence).
     pub client_message_id: Uuid,
-    /// Appareils destinataires.
+    /// Appareils destinataires de ce site.
     pub recipients: Vec<Uuid>,
+    /// Appareils destinataires d'autres sites (relayés par la fédération).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote: Vec<RemoteRecipients>,
     /// Message MLS sérialisé (opaque pour le serveur).
     #[serde(with = "b64")]
     pub payload: Vec<u8>,
@@ -605,8 +647,12 @@ mod tests {
 
     #[test]
     fn binary_fields_roundtrip_as_base64() {
-        let req =
-            SendRequest { client_message_id: Uuid::nil(), recipients: vec![Uuid::nil()], payload: vec![0, 1, 2, 255] };
+        let req = SendRequest {
+            client_message_id: Uuid::nil(),
+            recipients: vec![Uuid::nil()],
+            remote: Vec::new(),
+            payload: vec![0, 1, 2, 255],
+        };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"payload\":\"AAEC/w==\""));
         let back: SendRequest = serde_json::from_str(&json).unwrap();
@@ -619,3 +665,46 @@ mod tests {
         assert_eq!(json, r#"{"type":"new_messages"}"#);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fédération entre sites
+// ---------------------------------------------------------------------------
+
+/// Informations publiques d'un site.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SiteInfo {
+    pub name: String,
+    /// Clé publique Ed25519 de fédération (à épingler par les sites pairs).
+    #[serde(with = "b64")]
+    pub federation_key: Vec<u8>,
+}
+
+/// Distribution d'un message à des appareils d'un autre site.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationDeliver {
+    /// Identifiant du message (idempotence par site d'origine).
+    pub message_id: Uuid,
+    pub devices: Vec<Uuid>,
+    #[serde(with = "b64")]
+    pub payload: Vec<u8>,
+}
+
+/// Accusé de réception (la réponse est signée par le site destinataire).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationAck {
+    pub message_id: Uuid,
+    pub accepted: usize,
+}
+
+/// Tête du journal Key Transparency d'un site, signée par sa clé de site
+/// (témoins et comparaison entre sites).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedKtHead {
+    pub site: String,
+    pub head: KtHead,
+    #[serde(with = "b64")]
+    pub signature: Vec<u8>,
+}
+
+/// Délai de conservation d'un message dans la file de fédération.
+pub const FEDERATION_RETENTION_SECS: i64 = 7 * 24 * 3600;

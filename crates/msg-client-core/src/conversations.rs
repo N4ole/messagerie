@@ -6,6 +6,8 @@
 //! (son créateur) — émet les commits. Les autres membres envoient des
 //! *propositions* (rotation, départ) que l'administrateur valide. Le serveur
 //! n'ordonnant pas les commits, cette règle évite les fourches d'époque.
+//! L'administrateur peut transférer ce rôle à un autre membre (annonce
+//! `GroupInfo` qu'il est seul autorisé à émettre) puis quitter le groupe.
 
 use std::collections::HashMap;
 
@@ -13,7 +15,7 @@ use msg_crypto::app_message::{AppBody, AppMessage, AttachmentRef};
 use msg_crypto::identity::DeviceCertificate;
 use msg_crypto::mls::{GroupMember, Incoming, MemberIdentity};
 use msg_crypto::safety;
-use msg_proto::{validate_username, PublishedDevice, SendRequest, UserDirectoryEntry};
+use msg_proto::{parse_address, PublishedDevice, RemoteRecipients, SendRequest, UserDirectoryEntry};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -172,16 +174,62 @@ impl Client {
         }
     }
 
-    pub(crate) fn verify_device(username: &str, identity_key: &[u8], d: &PublishedDevice) -> Result<()> {
-        DeviceCertificate {
-            username: username.into(),
-            device_id: d.device_id,
-            api_key: d.api_key.clone(),
-            mls_signature_key: d.mls_signature_key.clone(),
-            created_at: d.cert_created_at,
+    /// Vérifie le certificat d'un appareil : signé par la clé d'identité pour
+    /// l'adresse qualifiée `nom@site` ou, pour un appareil de ce site
+    /// antérieur à la fédération, pour le nom seul.
+    pub(crate) fn verify_device(&self, username: &str, identity_key: &[u8], d: &PublishedDevice) -> Result<()> {
+        let mut names = Vec::with_capacity(2);
+        if username.contains('@') {
+            names.push(username.to_owned());
+        } else {
+            if let Some(site) = &self.site {
+                names.push(format!("{username}@{site}"));
+            }
+            names.push(username.to_owned());
         }
-        .verify(identity_key, &d.cert_signature)
-        .map_err(|_| ClientError::Verification(username.into(), "certificat d'appareil invalide".into()))
+        let ok = names.into_iter().any(|name| {
+            DeviceCertificate {
+                username: name,
+                device_id: d.device_id,
+                api_key: d.api_key.clone(),
+                mls_signature_key: d.mls_signature_key.clone(),
+                created_at: d.cert_created_at,
+            }
+            .verify(identity_key, &d.cert_signature)
+            .is_ok()
+        });
+        if ok {
+            Ok(())
+        } else {
+            Err(ClientError::Verification(username.into(), "certificat d'appareil invalide".into()))
+        }
+    }
+
+    /// Forme envoyée sur le réseau d'un nom affiché : qualifiée `nom@site`
+    /// pour les utilisateurs de ce site (non ambiguë chez les autres sites).
+    pub(crate) fn wire_name(&self, name: &str) -> String {
+        match (&self.site, name.contains('@')) {
+            (Some(site), false) => format!("{name}@{site}"),
+            _ => name.to_owned(),
+        }
+    }
+
+    /// Forme affichée d'un nom reçu : `nom@<ce site>` devient `nom`.
+    pub(crate) fn local_name(&self, name: &str) -> String {
+        match &self.site {
+            Some(site) => name.strip_suffix(site.as_str()).and_then(|u| u.strip_suffix('@')).unwrap_or(name).to_owned(),
+            None => name.to_owned(),
+        }
+    }
+
+    /// Mémorise le site des appareils distants d'un utilisateur (routage).
+    fn note_sites(&self, username: &str, devices: impl IntoIterator<Item = Uuid>) {
+        if let Some(site) = self.remote_site(username).map(str::to_owned) {
+            let mut map = self.device_sites.lock().unwrap_or_else(|e| e.into_inner());
+            for d in devices {
+                map.insert(d, site.clone());
+            }
+        }
     }
 
     /// Vérifie que chaque membre d'un groupe correspond à un appareil certifié
@@ -210,7 +258,7 @@ impl Client {
                 .iter()
                 .find(|d| d.device_id == m.identity.device_id)
                 .ok_or_else(|| ClientError::Verification(name.clone(), "appareil absent de l'annuaire".into()))?;
-            Self::verify_device(name, &entry.identity_key, dev)?;
+            self.verify_device(name, &entry.identity_key, dev)?;
             if dev.mls_signature_key != m.signature_key {
                 return Err(ClientError::Verification(name.clone(), "clé MLS non certifiée".into()));
             }
@@ -243,7 +291,7 @@ impl Client {
         username: &str,
         only: Option<&[Uuid]>,
     ) -> Result<(Vec<Vec<u8>>, Vec<Uuid>)> {
-        validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
+        parse_address(username).map_err(|e| ClientError::Invalid(e.into()))?;
         let entry = self.verified_claim(username, only).await?;
         if self.check_identity(username, &entry.identity_key)? == IdentityCheck::Changed {
             return Err(ClientError::IdentityChanged(username.into()));
@@ -251,7 +299,7 @@ impl Client {
         let mut kps = Vec::new();
         let mut devices = Vec::new();
         for d in &entry.devices {
-            Self::verify_device(username, &entry.identity_key, d)?;
+            self.verify_device(username, &entry.identity_key, d)?;
             if only.is_some_and(|o| !o.contains(&d.device_id)) || d.device_id == self.device_id {
                 continue;
             }
@@ -265,6 +313,7 @@ impl Client {
             kps.push(kp.clone());
             devices.push(d.device_id);
         }
+        self.note_sites(username, devices.iter().copied());
         if kps.is_empty() {
             return Err(ClientError::Api {
                 status: 404,
@@ -402,20 +451,39 @@ impl Client {
     // --- Envoi -------------------------------------------------------------
 
     pub(crate) fn other_devices(&self, group_id: &[u8]) -> Result<Vec<Uuid>> {
-        Ok(self
-            .mls
-            .members(group_id)?
-            .into_iter()
-            .map(|m| m.identity.device_id)
-            .filter(|d| *d != self.device_id)
-            .collect())
+        let mut out = Vec::new();
+        for m in self.mls.members(group_id)? {
+            if m.identity.device_id != self.device_id {
+                self.note_sites(&m.identity.username, [m.identity.device_id]);
+                out.push(m.identity.device_id);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Requête d'envoi : appareils de ce site d'une part, appareils d'autres
+    /// sites (relayés par la fédération) d'autre part.
+    fn send_request(&self, client_message_id: Uuid, devices: Vec<Uuid>, payload: Vec<u8>) -> SendRequest {
+        let sites = self.device_sites.lock().unwrap_or_else(|e| e.into_inner());
+        let mut recipients = Vec::new();
+        let mut remote: Vec<RemoteRecipients> = Vec::new();
+        for d in devices {
+            match sites.get(&d) {
+                None => recipients.push(d),
+                Some(site) => match remote.iter_mut().find(|r| &r.site == site) {
+                    Some(r) => r.devices.push(d),
+                    None => remote.push(RemoteRecipients { site: site.clone(), devices: vec![d] }),
+                },
+            }
+        }
+        SendRequest { client_message_id, recipients, remote, payload }
     }
 
     pub(crate) async fn post(&self, recipients: Vec<Uuid>, payload: Vec<u8>) -> Result<()> {
         if recipients.is_empty() {
             return Ok(());
         }
-        self.api.send(&SendRequest { client_message_id: Uuid::new_v4(), recipients, payload }).await?;
+        self.api.send(&self.send_request(Uuid::new_v4(), recipients, payload)).await?;
         Ok(())
     }
 
@@ -427,7 +495,7 @@ impl Client {
         // L'état du ratchet a avancé : il est persisté avant l'envoi.
         self.save_mls()?;
         if !recipients.is_empty() {
-            self.api.send(&SendRequest { client_message_id: app.id, recipients, payload: ct }).await?;
+            self.api.send(&self.send_request(app.id, recipients, ct)).await?;
         }
         self.store.note_sent(group_id)?;
         self.persist_tokens()?;
@@ -484,8 +552,9 @@ impl Client {
 
     /// Ouvre (ou retrouve) une conversation directe chiffrée avec `peer`.
     pub async fn start_conversation(&mut self, peer: &str) -> Result<ConversationView> {
-        validate_username(peer).map_err(|e| ClientError::Invalid(e.into()))?;
-        if peer == self.username {
+        parse_address(peer).map_err(|e| ClientError::Invalid(e.into()))?;
+        let peer = &self.local_name(peer);
+        if *peer == self.username {
             return Err(ClientError::Invalid("impossible d'ouvrir une conversation avec soi-même".into()));
         }
         if let Some(gid) = self.store.conversation_with(peer)? {
@@ -523,7 +592,7 @@ impl Client {
         // rejoignent aussi la conversation).
         self.send_app(
             &created.group_id,
-            AppBody::GroupInfo { name: String::new(), admin: self.username.clone() },
+            AppBody::GroupInfo { name: String::new(), admin: self.wire_name(&self.username) },
             None,
         )
         .await?;
@@ -577,8 +646,12 @@ impl Client {
             s.insert_conversation(&conv)
         })?;
         self.post(recipients, created.welcome).await?;
-        self.send_app(&created.group_id, AppBody::GroupInfo { name: name.into(), admin: self.username.clone() }, None)
-            .await?;
+        self.send_app(
+            &created.group_id,
+            AppBody::GroupInfo { name: name.into(), admin: self.wire_name(&self.username) },
+            None,
+        )
+        .await?;
         self.conversation(&hex::encode(&created.group_id))
     }
 
@@ -599,7 +672,7 @@ impl Client {
         self.post(existing, added.commit).await?;
         self.post(new_devices, added.welcome).await?;
         let name = c.name.clone().unwrap_or_default();
-        self.send_app(&c.group_id, AppBody::GroupInfo { name, admin: self.username.clone() }, None).await?;
+        self.send_app(&c.group_id, AppBody::GroupInfo { name, admin: self.wire_name(&self.username) }, None).await?;
         self.conversation(conversation_id)
     }
 
@@ -629,6 +702,26 @@ impl Client {
         self.conversation(conversation_id)
     }
 
+    /// Transfère l'administration (seul émetteur de commits) à un autre
+    /// membre. L'annonce est chiffrée dans le groupe ; chaque appareil ne
+    /// l'accepte que de l'administrateur en place. L'ancien administrateur
+    /// cesse aussitôt d'émettre des commits et peut ensuite quitter le groupe.
+    pub async fn transfer_admin(&mut self, conversation_id: &str, username: &str) -> Result<ConversationView> {
+        let c = self.active_conversation(conversation_id)?;
+        self.require_admin(&c)?;
+        if username == self.username {
+            return Err(ClientError::Invalid("vous êtes déjà administrateur".into()));
+        }
+        if !usernames(&self.mls.members(&c.group_id)?).iter().any(|u| u == username) {
+            return Err(ClientError::Invalid("cet utilisateur n'est pas membre du groupe".into()));
+        }
+        let name = c.name.clone().unwrap_or_default();
+        self.send_app(&c.group_id, AppBody::GroupInfo { name: name.clone(), admin: self.wire_name(username) }, None)
+            .await?;
+        self.store.set_group_info(&c.group_id, &name, username)?;
+        self.conversation(conversation_id)
+    }
+
     /// Quitte un groupe : proposition de départ validée par l'administrateur.
     pub async fn leave_group(&mut self, conversation_id: &str) -> Result<()> {
         let c = self.store.conversation(&decode_id(conversation_id)?)?.ok_or(ClientError::UnknownConversation)?;
@@ -637,7 +730,7 @@ impl Client {
         }
         if self.effective_admin(&c).as_deref() == Some(self.username.as_str()) {
             return Err(ClientError::Invalid(
-                "l'administrateur ne peut pas quitter le groupe (transfert d'administration non pris en charge en Phase 2)".into(),
+                "l'administrateur doit d'abord transférer l'administration à un autre membre".into(),
             ));
         }
         let proposal = self.mls.propose_leave(&c.group_id)?;
@@ -654,7 +747,15 @@ impl Client {
         let c = self.store.contact(username)?.ok_or_else(|| ClientError::Invalid("correspondant inconnu".into()))?;
         let changed = c.pending_identity_key.is_some();
         let key = c.pending_identity_key.unwrap_or(c.identity_key);
-        let n = safety::safety_number(&self.username, &self.identity_public, username, &key);
+        // Entre sites, les deux côtés utilisent les adresses qualifiées (même
+        // numéro des deux côtés) ; sur un même site, les noms seuls (numéros
+        // inchangés depuis la Phase 2).
+        let (me, them) = if username.contains('@') {
+            (self.address(), username.to_owned())
+        } else {
+            (self.username.clone(), username.to_owned())
+        };
+        let n = safety::safety_number(&me, &self.identity_public, &them, &key);
         Ok((n, c.verified && !changed, changed))
     }
 
@@ -842,6 +943,7 @@ impl Client {
                     return Err(ClientError::Invalid("groupe sans autre membre".into()));
                 }
                 self.store.insert_conversation(&conv)?;
+                self.store.rejoin_conversation(&group_id, &conv.status)?;
                 Ok(Handled {
                     conversation: Some(hex::encode(group_id)),
                     identity_changes: outcome.changed,
@@ -891,8 +993,18 @@ impl Client {
                 let (kind, body, attachment) = match app.body {
                     AppBody::Text { text } => ("text", text, None),
                     AppBody::GroupInfo { name, admin } => {
-                        // Seul l'administrateur annonce les informations du groupe.
-                        if sender.username != admin || c.admin.as_deref().is_some_and(|a| a != admin) {
+                        let admin = self.local_name(&admin);
+                        // Seul l'administrateur en place annonce les informations
+                        // du groupe : il se désigne lui-même, ou désigne un autre
+                        // membre (transfert). Avant toute annonce (groupe rejoint),
+                        // seul un membre se désignant lui-même est accepté.
+                        let authorized = match c.admin.as_deref() {
+                            Some(current) => sender.username == current,
+                            None => sender.username == admin,
+                        };
+                        let is_member =
+                            self.mls.members(&group_id).map(|m| usernames(&m).contains(&admin)).unwrap_or(false);
+                        if !authorized || !is_member {
                             return Err(ClientError::Verification(
                                 sender.username,
                                 "informations de groupe non autorisées".into(),

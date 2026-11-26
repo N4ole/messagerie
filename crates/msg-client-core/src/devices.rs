@@ -81,6 +81,9 @@ pub struct PendingLink {
     link_id: Uuid,
     poll_secret: Zeroizing<String>,
     pub expires_at: i64,
+    /// Site du serveur ; identité du credential MLS (`nom@site`).
+    site: Option<String>,
+    mls_name: String,
 }
 
 pub enum LinkOutcome {
@@ -128,7 +131,7 @@ impl PendingLink {
                     return Err(ClientError::Verification(self.username.clone(), "certificat d'appareil".into()));
                 }
                 DeviceCertificate {
-                    username: self.username.clone(),
+                    username: self.mls_name.clone(),
                     device_id: reg.device_id,
                     api_key: reg.api_key.clone(),
                     mls_signature_key: reg.mls_signature_key.clone(),
@@ -155,6 +158,10 @@ impl PendingLink {
                     s.set_meta(meta::MLS_STATE, &self.mls.export_state()?)?;
                     s.set_meta(meta::CERT_CREATED_AT, &reg.cert_created_at.to_be_bytes())?;
                     s.set_meta(meta::CERT_SIGNATURE, &reg.cert_signature)?;
+                    s.set_meta(meta::MLS_USERNAME, self.mls_name.as_bytes())?;
+                    if let Some(site) = &self.site {
+                        s.set_meta(meta::SITE, site.as_bytes())?;
+                    }
                     Ok(())
                 })?;
                 drop(store);
@@ -186,13 +193,16 @@ impl Client {
         }
         let api_key = SigningKeyPair::generate()?;
         let device_id = Uuid::new_v4();
-        let mls = MlsClient::create(MemberIdentity { username: username.into(), device_id })?;
+        let api: ApiClient = cfg.api()?;
+        let site = api.site_info().await.ok().map(|s| s.name);
+        let mls_name = crate::client::credential_name(username, site.as_deref());
+        let mut mls = MlsClient::create(MemberIdentity { username: mls_name.clone(), device_id })?;
+        mls.set_home_site(site.clone());
         let device = PendingDevice {
             device_id,
             api_key: api_key.public_bytes().to_vec(),
             mls_signature_key: mls.signature_public_key(),
         };
-        let api: ApiClient = cfg.api()?;
         let r = api
             .link_start(&LinkStartRequest {
                 username: username.into(),
@@ -212,6 +222,8 @@ impl Client {
             link_id: r.link_id,
             poll_secret: Zeroizing::new(r.poll_secret),
             expires_at: r.expires_at,
+            site,
+            mls_name,
         })
     }
 
@@ -251,8 +263,9 @@ impl Client {
             ));
         }
         let created_at = crate::now_secs();
+        // Le nouvel appareil est du même site : identité qualifiée `nom@site`.
         let sig = DeviceCertificate {
-            username: self.username.clone(),
+            username: self.address(),
             device_id: req.device.device_id,
             api_key: req.device.api_key.clone(),
             mls_signature_key: req.device.mls_signature_key.clone(),
@@ -339,7 +352,7 @@ impl Client {
                     let mut ok = Vec::new();
                     if self.contact_identity_matches(u, &entry.identity_key)? {
                         for d in &entry.devices {
-                            if Self::verify_device(u, &entry.identity_key, d).is_ok() {
+                            if self.verify_device(u, &entry.identity_key, d).is_ok() {
                                 ok.push(d.device_id);
                             }
                         }
@@ -399,7 +412,12 @@ impl Client {
                     self.post(existing, added.commit).await?;
                     self.post(new_devices, added.welcome).await?;
                     let name = c.name.clone().unwrap_or_default();
-                    self.send_app(&c.group_id, AppBody::GroupInfo { name, admin: self.username.clone() }, None).await?;
+                    self.send_app(
+                        &c.group_id,
+                        AppBody::GroupInfo { name, admin: self.wire_name(&self.username) },
+                        None,
+                    )
+                    .await?;
                 }
             }
             changed += 1;

@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "messagerie.fullname" . }}
+  labels: {{- include "messagerie.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels: {{- include "messagerie.selector" . | nindent 6 }}
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: {{- include "messagerie.selector" . | nindent 8 }}
+      annotations:
+        checksum/peers: {{ toJson .Values.federation.peers | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "messagerie.podSecurity" . | nindent 6 }}
+      # Instances réparties sur des nœuds et zones différents.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "messagerie.selector" . | nindent 14 }}
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "messagerie.selector" . | nindent 14 }}
+      containers:
+        - name: server
+          image: {{ include "messagerie.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          env:
+            {{- include "messagerie.env" . | nindent 12 }}
+            - name: MSG_BIND
+              value: 0.0.0.0:8080
+            {{- if .Values.metrics.enabled }}
+            - name: MSG_METRICS_BIND
+              value: {{ printf "0.0.0.0:%v" .Values.metrics.port | quote }}
+            - name: MSG_METRICS_TOKEN_FILE
+              value: /run/secrets/app/metrics-token
+            {{- end }}
+          ports:
+            - { name: http, containerPort: 8080 }
+            {{- if .Values.metrics.enabled }}
+            - { name: metrics, containerPort: {{ .Values.metrics.port }} }
+            {{- end }}
+          readinessProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: 20
+            failureThreshold: 3
+          {{- include "messagerie.containerSecurity" . | nindent 10 }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "messagerie.volumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "messagerie.volumes" . | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}

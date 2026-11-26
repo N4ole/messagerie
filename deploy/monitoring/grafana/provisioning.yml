@@ -1,0 +1,7 @@
+# Grafana : chargement automatique du tableau de bord.
+apiVersion: 1
+providers:
+  - name: messagerie
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

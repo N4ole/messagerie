@@ -1,0 +1,8 @@
+Messagerie {{ .Chart.AppVersion }} — site « {{ .Values.site.name }} ».
+
+1. Le secret « {{ .Values.existingSecret }} » doit contenir `server-secret`
+   (openssl rand -hex 32) et `metrics-token`. Sauvegardez `server-secret` hors ligne.
+2. Premier administrateur :
+   kubectl exec deploy/{{ include "messagerie.fullname" . }} -- msg-server bootstrap-admin --username admin
+3. Clé de fédération du site (à transmettre aux sites pairs) :
+   curl https://{{ .Values.site.domain }}/v1/site

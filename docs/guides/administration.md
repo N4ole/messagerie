@@ -68,6 +68,14 @@ Le créateur d'un groupe en est l'administrateur : lui seul ajoute ou retire
 des membres (ADR-0012). Le serveur ne connaît ni les groupes, ni leurs noms,
 ni leurs membres : il relaie des messages vers des appareils.
 
+Depuis la Phase 4, l'administrateur peut **transférer** ce rôle à un autre
+membre (bouton ★ à côté du membre, avec confirmation), puis quitter le groupe.
+Un administrateur qui disparaît sans transfert bloque l'évolution du groupe :
+le recréer.
+
+Déploiement multi-instance, fédération entre sites, supervision et
+sauvegardes : voir [Production](production.md).
+
 ## Réinitialisation d'un compte
 
 `reset` efface mot de passe, TOTP, clé d'identité et appareils, puis émet un

@@ -141,7 +141,7 @@ async fn key_transparency_detects_unpublished_and_substituted_keys() {
     alice.start_conversation("bob").await.unwrap();
 
     // Une nouvelle instance (même secret) rejoue le journal à l'identique.
-    let head = admin.api().kt_head().await.unwrap();
+    let head = admin.api().kt_head(None).await.unwrap();
     let restarted = msg_server::AppState::try_new(s.pool.clone(), s.server_cfg.clone()).unwrap();
     let replayed = msg_server::kt::head(&restarted).await.unwrap();
     assert_eq!((replayed.epoch, replayed.root_hash), (head.epoch, head.root_hash.clone()));
@@ -170,9 +170,9 @@ async fn key_transparency_detects_unpublished_and_substituted_keys() {
     assert!(matches!(err, ClientError::IdentityChanged(_)), "{err:?}");
 
     // Le journal a avancé de façon vérifiable (preuves d'ajout seul).
-    let head2 = admin.api().kt_head().await.unwrap();
+    let head2 = admin.api().kt_head(None).await.unwrap();
     assert!(head2.epoch > head.epoch);
-    let audit = admin.api().kt_audit(head.epoch, head2.epoch).await.unwrap();
+    let audit = admin.api().kt_audit(None, head.epoch, head2.epoch).await.unwrap();
     assert_eq!(msg_kt::verify_audit(&head.root_hash, &audit).await.unwrap(), head2.root_hash);
 
     // Une base dont le journal a été altéré n'est pas servie.

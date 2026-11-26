@@ -95,6 +95,7 @@ export function mockBackend(
     ),
     addMember: vi.fn(async () => conv),
     removeMember: vi.fn(async () => conv),
+    transferAdmin: vi.fn(async () => conv),
     leaveGroup: vi.fn(async () => undefined),
     setEphemeral: vi.fn(async () => undefined),
     send: vi.fn(async (id: string, text: string): Promise<Message> => message({ conversation_id: id, text })),

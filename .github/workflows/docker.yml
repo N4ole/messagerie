@@ -5,7 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    paths: ["server/**", "crates/**", "ui/**", "deploy/docker/**", "Cargo.lock", "pnpm-lock.yaml"]
+    paths: ["server/**", "crates/**", "ui/**", "deploy/**", "Cargo.lock", "pnpm-lock.yaml"]
 
 permissions: {}
 
@@ -48,6 +48,23 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: mode=max
           sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Test de fumée du déploiement Compose de production avec l'image
+      # construite (cache réutilisé : pas de seconde compilation).
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.server
+          load: true
+          tags: messagerie-server:smoke
+          cache-from: type=gha
+      - name: Outils (age)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends age
+      - name: Test de fumée Compose (TLS, 2 instances, métriques, sauvegarde)
+        env:
+          MSG_IMAGE: messagerie-server:smoke
+        run: sh deploy/docker/smoke-test.sh
       - if: github.event_name != 'pull_request' && github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

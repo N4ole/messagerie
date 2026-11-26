@@ -5,8 +5,11 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod federation;
 pub mod kt;
 pub mod logging;
+pub mod metrics;
+pub mod notify;
 pub mod passwords;
 pub mod routes;
 pub mod secrets;

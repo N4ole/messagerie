@@ -372,20 +372,36 @@ export function Chat({ session, onLogout }: { session: Session; onLogout: () => 
                   {conv.members
                     .filter((m) => m !== session.username)
                     .map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        className="ghost small"
-                        aria-label={`Retirer ${m}`}
-                        onClick={() =>
-                          void run(async () => {
-                            await backend.removeMember(conv.id, m);
-                            await refreshList();
-                          })
-                        }
-                      >
-                        {m} ✕
-                      </button>
+                      <span key={m} className="member">
+                        <button
+                          type="button"
+                          className="ghost small"
+                          aria-label={`Retirer ${m}`}
+                          onClick={() =>
+                            void run(async () => {
+                              await backend.removeMember(conv.id, m);
+                              await refreshList();
+                            })
+                          }
+                        >
+                          {m} ✕
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost small"
+                          aria-label={`Nommer ${m} administrateur`}
+                          title="Transférer l'administration (vous ne pourrez plus gérer le groupe)"
+                          onClick={() =>
+                            void run(async () => {
+                              if (!window.confirm(`Transférer l'administration du groupe à ${m} ? Vous ne pourrez plus gérer les membres.`)) return;
+                              await backend.transferAdmin(conv.id, m);
+                              await refreshList();
+                            })
+                          }
+                        >
+                          ★
+                        </button>
+                      </span>
                     ))}
                 </span>
               </div>

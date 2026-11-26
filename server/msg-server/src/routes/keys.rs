@@ -96,44 +96,95 @@ fn publish(d: DeviceRow, key_package: Option<Vec<u8>>) -> PublishedDevice {
     }
 }
 
-/// Consultation de l'annuaire (sans consommer de KeyPackage).
-pub async fn directory(
-    State(st): State<AppState>,
-    Extension(_ctx): Extension<AuthContext>,
-    Path(username): Path<String>,
-) -> AppResult<Json<UserDirectoryEntry>> {
-    let kt = crate::kt::lookup(&st, &username).await?;
-    let (identity_key, devices) = load_user(&st, &username).await?;
-    Ok(Json(UserDirectoryEntry {
-        username,
+/// Entrée d'annuaire d'un utilisateur de ce site (avec preuve KT).
+pub(crate) async fn directory_entry(st: &AppState, username: &str) -> AppResult<UserDirectoryEntry> {
+    let kt = crate::kt::lookup(st, username).await?;
+    let (identity_key, devices) = load_user(st, username).await?;
+    Ok(UserDirectoryEntry {
+        username: username.to_owned(),
         identity_key,
         devices: devices.into_iter().map(|d| publish(d, None)).collect(),
         kt,
-    }))
+    })
+}
+
+/// Consultation de l'annuaire (sans consommer de KeyPackage). Une adresse
+/// `nom@site` d'un autre site est relayée au site concerné (fédération) :
+/// le client ne contacte jamais lui-même un site distant.
+pub async fn directory(
+    State(st): State<AppState>,
+    Extension(_ctx): Extension<AuthContext>,
+    Path(address): Path<String>,
+) -> AppResult<Json<UserDirectoryEntry>> {
+    match crate::federation::route(&st, &address)? {
+        crate::federation::Route::Local(user) => Ok(Json(directory_entry(&st, &user).await?)),
+        crate::federation::Route::Remote(peer, user) => {
+            Ok(Json(crate::federation::client::get_json(&st, &peer, &format!("/v1/federation/users/{user}")).await?))
+        }
+    }
+}
+
+pub(crate) fn parse_devices(list: Option<&str>) -> AppResult<Option<Vec<Uuid>>> {
+    match list {
+        Some(list) => Ok(Some(
+            list.split(',')
+                .map(|d| d.trim().parse::<Uuid>())
+                .collect::<Result<_, _>>()
+                .map_err(|_| AppError::bad_request("liste d'appareils invalide"))?,
+        )),
+        None => Ok(None),
+    }
 }
 
 #[derive(Deserialize)]
 pub struct ClaimQuery {
     /// Appareils visés (séparés par des virgules) ; par défaut tous.
-    devices: Option<String>,
+    pub(crate) devices: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct AuditQuery {
-    from: u64,
-    to: u64,
+    pub(crate) from: u64,
+    pub(crate) to: u64,
 }
 
-pub async fn kt_head(State(st): State<AppState>, Extension(_ctx): Extension<AuthContext>) -> AppResult<Json<KtHead>> {
-    Ok(Json(crate::kt::head(&st).await?))
+#[derive(Deserialize)]
+pub struct SiteQuery {
+    /// Site dont on veut le journal (fédération) ; par défaut ce site.
+    site: Option<String>,
+}
+
+pub async fn kt_head(
+    State(st): State<AppState>,
+    Extension(_ctx): Extension<AuthContext>,
+    Query(q): Query<SiteQuery>,
+) -> AppResult<Json<KtHead>> {
+    match q.site.as_deref().filter(|s| *s != st.cfg().site_name) {
+        None => Ok(Json(crate::kt::head(&st).await?)),
+        Some(site) => {
+            let peer = crate::federation::peer(&st, site)?;
+            let signed: msg_proto::SignedKtHead =
+                crate::federation::client::get_json(&st, &peer, "/v1/federation/kt/head").await?;
+            crate::federation::verify_signed_head(&peer, &signed)?;
+            Ok(Json(signed.head))
+        }
+    }
 }
 
 pub async fn kt_audit(
     State(st): State<AppState>,
     Extension(_ctx): Extension<AuthContext>,
     Query(q): Query<AuditQuery>,
+    Query(site): Query<SiteQuery>,
 ) -> AppResult<Json<KtAudit>> {
-    Ok(Json(crate::kt::audit(&st, q.from, q.to).await?))
+    match site.site.as_deref().filter(|s| *s != st.cfg().site_name) {
+        None => Ok(Json(crate::kt::audit(&st, q.from, q.to).await?)),
+        Some(s) => {
+            let peer = crate::federation::peer(&st, s)?;
+            let path = format!("/v1/federation/kt/audit?from={}&to={}", q.from, q.to);
+            Ok(Json(crate::federation::client::get_json(&st, &peer, &path).await?))
+        }
+    }
 }
 
 /// Réclame un KeyPackage par appareil de l'utilisateur (ou par appareil
@@ -146,24 +197,36 @@ pub async fn kt_audit(
 pub async fn claim(
     State(st): State<AppState>,
     Extension(ctx): Extension<AuthContext>,
-    Path(username): Path<String>,
+    Path(address): Path<String>,
     Query(q): Query<ClaimQuery>,
 ) -> AppResult<Json<UserDirectoryEntry>> {
-    let wanted: Option<Vec<Uuid>> = match &q.devices {
-        Some(list) => Some(
-            list.split(',')
-                .map(|d| d.trim().parse::<Uuid>())
-                .collect::<Result<_, _>>()
-                .map_err(|_| AppError::bad_request("liste d'appareils invalide"))?,
-        ),
-        None => None,
-    };
-    let kt = crate::kt::lookup(&st, &username).await?;
-    let (identity_key, devices) = load_user(&st, &username).await?;
+    let wanted = parse_devices(q.devices.as_deref())?;
+    match crate::federation::route(&st, &address)? {
+        crate::federation::Route::Local(user) => Ok(Json(claim_entry(&st, &user, Some(ctx.device_id), wanted).await?)),
+        crate::federation::Route::Remote(peer, user) => {
+            let mut path = format!("/v1/federation/users/{user}/claim");
+            if let Some(d) = &q.devices {
+                path.push_str(&format!("?devices={d}"));
+            }
+            Ok(Json(crate::federation::client::post_json(&st, &peer, &path, &()).await?))
+        }
+    }
+}
+
+/// Réclamation de KeyPackages pour un utilisateur de ce site.
+pub(crate) async fn claim_entry(
+    st: &AppState,
+    username: &str,
+    requester: Option<Uuid>,
+    wanted: Option<Vec<Uuid>>,
+) -> AppResult<UserDirectoryEntry> {
+    let username = username.to_owned();
+    let kt = crate::kt::lookup(st, &username).await?;
+    let (identity_key, devices) = load_user(st, &username).await?;
     let mut out = Vec::with_capacity(devices.len());
     let mut claimed = 0;
     for d in devices {
-        if d.id == ctx.device_id || wanted.as_ref().is_some_and(|w| !w.contains(&d.id)) {
+        if Some(d.id) == requester || wanted.as_ref().is_some_and(|w| !w.contains(&d.id)) {
             out.push(publish(d, None));
             continue;
         }
@@ -190,5 +253,5 @@ pub async fn claim(
     if claimed == 0 {
         return Err(AppError::not_found());
     }
-    Ok(Json(UserDirectoryEntry { username, identity_key, devices: out, kt }))
+    Ok(UserDirectoryEntry { username, identity_key, devices: out, kt })
 }

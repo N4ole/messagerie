@@ -272,8 +272,7 @@ pub async fn link_approve(
         mls_signature_key: row.mls_signature_key.clone(),
         created_at: req.cert_created_at,
     };
-    cert.verify(&identity_key, &req.cert_signature)
-        .map_err(|_| AppError::bad_request("certificat d'appareil invalide"))?;
+    super::account::verify_device_cert((&ctx.username, &st.cfg().site_name), cert, &identity_key, &req.cert_signature)?;
     let (devices,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM devices WHERE account_id = $1")
         .bind(ctx.account_id)
         .fetch_one(&mut *tx)

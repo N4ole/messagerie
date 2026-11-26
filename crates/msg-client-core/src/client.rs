@@ -39,6 +39,11 @@ pub(crate) mod meta {
     /// époque et racine vérifiées.
     pub const KT_VRF: &str = "kt_vrf";
     pub const KT_STATE: &str = "kt_state";
+    /// Site du serveur (fédération) et identité inscrite dans le credential
+    /// MLS et le certificat de l'appareil (`nom@site` ; nom seul pour les
+    /// appareils antérieurs à la fédération).
+    pub const SITE: &str = "site";
+    pub const MLS_USERNAME: &str = "mls_username";
 }
 
 #[derive(Clone)]
@@ -122,6 +127,18 @@ pub struct Client {
     pub(crate) device_id: Uuid,
     /// Date (ms) de la dernière réconciliation des membres des groupes.
     pub(crate) last_reconcile_ms: i64,
+    /// Site du serveur de ce compte (fédération), s'il est connu.
+    pub(crate) site: Option<String>,
+    /// Site hébergeant chaque appareil distant rencontré (routage des envois).
+    pub(crate) device_sites: std::sync::Mutex<std::collections::HashMap<Uuid, String>>,
+}
+
+/// Identité inscrite dans le credential MLS et le certificat d'un appareil.
+pub(crate) fn credential_name(username: &str, site: Option<&str>) -> String {
+    match site {
+        Some(s) => format!("{username}@{s}"),
+        None => username.to_owned(),
+    }
 }
 
 pub(crate) fn get_meta(store: &LocalStore, k: &str) -> Result<Zeroizing<Vec<u8>>> {
@@ -159,17 +176,21 @@ impl Client {
         let identity = SigningKeyPair::generate()?;
         let api_key = SigningKeyPair::generate()?;
         let device_id = Uuid::new_v4();
-        let mls = MlsClient::create(MemberIdentity { username: username.into(), device_id })?;
+        let mut api = cfg.api()?;
+        // Identité qualifiée `nom@site` (non ambiguë entre sites fédérés).
+        let site = api.site_info().await.ok().map(|s| s.name);
+        let mls_name = credential_name(username, site.as_deref());
+        let mut mls = MlsClient::create(MemberIdentity { username: mls_name.clone(), device_id })?;
+        mls.set_home_site(site.clone());
         let cert_created_at = crate::now_secs();
         let cert = DeviceCertificate {
-            username: username.into(),
+            username: mls_name.clone(),
             device_id,
             api_key: api_key.public_bytes().to_vec(),
             mls_signature_key: mls.signature_public_key(),
             created_at: cert_created_at,
         };
         let cert_sig = cert.sign(&identity);
-        let mut api = cfg.api()?;
         let reg = DeviceRegistration {
             device_id,
             identity_key: identity.public_bytes().to_vec(),
@@ -197,6 +218,10 @@ impl Client {
             s.set_meta(meta::MLS_STATE, &mls.export_state()?)?;
             s.set_meta(meta::CERT_CREATED_AT, &cert_created_at.to_be_bytes())?;
             s.set_meta(meta::CERT_SIGNATURE, &cert_sig)?;
+            s.set_meta(meta::MLS_USERNAME, mls_name.as_bytes())?;
+            if let Some(site) = &site {
+                s.set_meta(meta::SITE, site.as_bytes())?;
+            }
             Ok(())
         })?;
         api.set_device(DeviceAuth { device_id, api_key });
@@ -209,6 +234,8 @@ impl Client {
             username: username.into(),
             device_id,
             last_reconcile_ms: 0,
+            site,
+            device_sites: Default::default(),
         };
         client.store.set_meta(meta::IDENTITY_PUBLIC, &client.identity_public)?;
         client.save_session(&tokens)?;
@@ -279,11 +306,16 @@ impl Client {
                 .map_err(|_| ClientError::Storage("clé d'identité publique".into()))?,
         };
         let api_key = SigningKeyPair::from_secret_bytes(&get_meta(&store, meta::API_SECRET)?)?;
-        let mls = MlsClient::restore(
-            MemberIdentity { username: username.into(), device_id },
+        let text =
+            |v: Zeroizing<Vec<u8>>| String::from_utf8(v.to_vec()).map_err(|e| ClientError::Storage(e.to_string()));
+        let site = store.get_meta(meta::SITE)?.map(text).transpose()?;
+        let mls_name = store.get_meta(meta::MLS_USERNAME)?.map(text).transpose()?.unwrap_or_else(|| username.into());
+        let mut mls = MlsClient::restore(
+            MemberIdentity { username: mls_name, device_id },
             &get_meta(&store, meta::MLS_PUBLIC)?,
             &get_meta(&store, meta::MLS_STATE)?,
         )?;
+        mls.set_home_site(site.clone());
         let mut api = cfg.api()?;
         api.set_device(DeviceAuth { device_id, api_key });
         Ok(Self {
@@ -295,7 +327,19 @@ impl Client {
             username: username.into(),
             device_id,
             last_reconcile_ms: 0,
+            site,
+            device_sites: Default::default(),
         })
+    }
+
+    /// Site de ce compte (fédération), s'il est connu.
+    pub fn site(&self) -> Option<&str> {
+        self.site.as_deref()
+    }
+
+    /// Adresse complète de ce compte (`nom@site`).
+    pub fn address(&self) -> String {
+        credential_name(&self.username, self.site.as_deref())
     }
 
     pub(crate) fn registration(&self) -> Result<DeviceRegistration> {

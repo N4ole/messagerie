@@ -11,6 +11,8 @@ pub struct ServerSecrets {
     totp_key: Zeroizing<[u8; 32]>,
     /// Graine de la clé VRF du répertoire Key Transparency.
     pub kt_vrf_seed: Zeroizing<[u8; 32]>,
+    /// Graine de la clé Ed25519 de fédération du site.
+    pub federation_seed: Zeroizing<[u8; 32]>,
 }
 
 impl ServerSecrets {
@@ -20,10 +22,12 @@ impl ServerSecrets {
         let mut pepper = Zeroizing::new([0u8; 32]);
         let mut totp_key = Zeroizing::new([0u8; 32]);
         let mut kt_vrf_seed = Zeroizing::new([0u8; 32]);
+        let mut federation_seed = Zeroizing::new([0u8; 32]);
         hk.expand(b"argon2-pepper", pepper.as_mut()).expect("longueur valide");
         hk.expand(b"totp-at-rest", totp_key.as_mut()).expect("longueur valide");
         hk.expand(b"kt-vrf", kt_vrf_seed.as_mut()).expect("longueur valide");
-        Self { pepper, totp_key, kt_vrf_seed }
+        hk.expand(b"federation-signing", federation_seed.as_mut()).expect("longueur valide");
+        Self { pepper, totp_key, kt_vrf_seed, federation_seed }
     }
 
     /// Chiffre un secret TOTP, lié au compte par l'AAD.

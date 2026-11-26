@@ -1,0 +1,104 @@
+# Valeurs par défaut du chart « messagerie ».
+image:
+  repository: ghcr.io/n4ole/messagerie-server
+  tag: ""            # défaut : appVersion du chart
+  pullPolicy: IfNotPresent
+  # Recommandé : épingler par empreinte (sha256:…).
+  digest: ""
+
+replicaCount: 3
+
+site:
+  # Nom du site (fédération : partie après « @ » des adresses).
+  name: messagerie.example.org
+  # Domaine public (WebAuthn, Ingress).
+  domain: messagerie.example.org
+  # Client web servi par le serveur ; "onionOnly" le restreint au service onion.
+  onionOnly: false
+
+# Secret existant contenant `server-secret` (64 hex) et `metrics-token`.
+# Créé hors du chart (sealed-secrets, External Secrets, Vault…). Le secret
+# racine doit être identique sur toutes les instances et sauvegardé hors ligne.
+existingSecret: messagerie-secrets
+
+federation:
+  # Liste blanche des sites pairs (nom, URL, clé publique hex épinglée).
+  peers: []
+  #  - name: lyon.example.org
+  #    url: https://lyon.example.org
+  #    public_key: "…64 hex…"
+  # Proxy SOCKS pour les pairs .onion (ex. socks5h://tor:9050).
+  proxy: ""
+  # Destinations autorisées en sortie (NetworkPolicy) : CIDR des pairs.
+  egressCIDRs: []
+
+database:
+  # true : cluster CloudNativePG géré par ce chart (opérateur requis).
+  cloudnativepg:
+    enabled: true
+    instances: 3
+    storage:
+      size: 20Gi
+      storageClass: ""
+    # Réplication synchrone : pas de perte de transaction validée à la bascule.
+    synchronous: true
+    backup:
+      enabled: false
+      # Archivage continu (WAL + sauvegardes de base) vers un stockage objet ;
+      # restauration à un instant donné (PITR).
+      destinationPath: s3://messagerie-backups/
+      endpointURL: ""
+      s3CredentialsSecret: messagerie-backup-s3
+      retentionPolicy: 30d
+      schedule: "0 0 3 * * *"
+  # Sinon : URL dans un secret existant (clé `uri`).
+  existingUriSecret: ""
+
+# Sauvegarde logique chiffrée côté client avec age (en plus de CNPG).
+logicalBackup:
+  enabled: false
+  schedule: "17 */6 * * *"
+  image: ""          # image construite depuis deploy/backup/Dockerfile
+  # Clés publiques age (le cluster ne détient jamais la clé privée).
+  recipients: []
+  keep: 28
+  pvcSize: 20Gi
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "30m"
+  tlsSecretName: messagerie-tls
+
+metrics:
+  enabled: true
+  port: 9100
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+  # Espace de noms autorisé à collecter les métriques (NetworkPolicy).
+  allowedNamespace: monitoring
+
+networkPolicy:
+  enabled: true
+  # Espace de noms du contrôleur d'Ingress.
+  ingressNamespace: ingress-nginx
+
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits: { memory: 1Gi }
+
+autoscaling:
+  enabled: false
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  minAvailable: 2
+
+nodeSelector: {}
+tolerations: []

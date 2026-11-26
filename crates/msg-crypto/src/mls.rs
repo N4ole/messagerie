@@ -148,6 +148,11 @@ pub struct MlsClient {
     signer: SignatureKeyPair,
     credential: CredentialWithKey,
     identity: MemberIdentity,
+    /// Site de cet appareil (fédération) : les identités `nom@site` de ce
+    /// site sont rendues sous leur forme courte `nom` ; celles des autres
+    /// sites restent qualifiées. Les credentials sans site (appareils
+    /// antérieurs à la fédération) désignent des utilisateurs de ce site.
+    home_site: Option<String>,
 }
 
 impl MlsClient {
@@ -160,7 +165,7 @@ impl MlsClient {
             credential: BasicCredential::new(identity.encode()).into(),
             signature_key: signer.to_public_vec().into(),
         };
-        Ok(Self { provider, signer, credential, identity })
+        Ok(Self { provider, signer, credential, identity, home_site: None })
     }
 
     /// Restaure un état exporté par [`MlsClient::export_state`].
@@ -178,7 +183,7 @@ impl MlsClient {
             credential: BasicCredential::new(identity.encode()).into(),
             signature_key: signer.to_public_vec().into(),
         };
-        Ok(Self { provider, signer, credential, identity })
+        Ok(Self { provider, signer, credential, identity, home_site: None })
     }
 
     /// Exporte l'intégralité de l'état (contient des secrets : à stocker
@@ -201,6 +206,25 @@ impl MlsClient {
 
     pub fn identity(&self) -> &MemberIdentity {
         &self.identity
+    }
+
+    /// Déclare le site de cet appareil (normalisation des identités).
+    pub fn set_home_site(&mut self, site: Option<String>) {
+        self.home_site = site;
+    }
+
+    /// Forme locale d'une identité : `nom@<ce site>` → `nom`.
+    pub fn normalize(&self, mut id: MemberIdentity) -> MemberIdentity {
+        if let Some(site) = &self.home_site {
+            if let Some(local) = id.username.strip_suffix(site.as_str()).and_then(|u| u.strip_suffix('@')) {
+                id.username = local.to_owned();
+            }
+        }
+        id
+    }
+
+    fn normalize_members(&self, members: Vec<GroupMember>) -> Vec<GroupMember> {
+        members.into_iter().map(|m| GroupMember { identity: self.normalize(m.identity), ..m }).collect()
     }
 
     /// Clé publique de signature MLS de cet appareil.
@@ -246,7 +270,7 @@ impl MlsClient {
     pub fn inspect_key_package(&self, bytes: &[u8]) -> Result<GroupMember> {
         let kp = self.validate_key_package(bytes)?;
         Ok(GroupMember {
-            identity: MemberIdentity::from_credential(kp.leaf_node().credential())?,
+            identity: self.normalize(MemberIdentity::from_credential(kp.leaf_node().credential())?),
             signature_key: kp.leaf_node().signature_key().as_slice().to_vec(),
         })
     }
@@ -273,7 +297,7 @@ impl MlsClient {
         Ok(CreatedGroup {
             group_id: group.group_id().as_slice().to_vec(),
             welcome: welcome.tls_serialize_detached().map_err(mls_err)?,
-            members: members_of(&group)?,
+            members: self.normalize_members(members_of(&group)?),
         })
     }
 
@@ -285,7 +309,7 @@ impl MlsClient {
 
     /// Membres actuels d'un groupe.
     pub fn members(&self, group_id: &[u8]) -> Result<Vec<GroupMember>> {
-        members_of(&self.load(group_id)?)
+        Ok(self.normalize_members(members_of(&self.load(group_id)?)?))
     }
 
     /// Chiffre et signe un message applicatif.
@@ -317,7 +341,7 @@ impl MlsClient {
         Ok(AddedMembers {
             commit: commit.tls_serialize_detached().map_err(mls_err)?,
             welcome: welcome.tls_serialize_detached().map_err(mls_err)?,
-            members: members_of(&group)?,
+            members: self.normalize_members(members_of(&group)?),
         })
     }
 
@@ -395,7 +419,10 @@ impl MlsClient {
                 if group.ciphersuite() != CIPHERSUITE {
                     return Err(CryptoError::WrongCiphersuite);
                 }
-                Ok(Incoming::Joined { group_id: group.group_id().as_slice().to_vec(), members: members_of(&group)? })
+                Ok(Incoming::Joined {
+                    group_id: group.group_id().as_slice().to_vec(),
+                    members: self.normalize_members(members_of(&group)?),
+                })
             }
             MlsMessageBodyIn::PrivateMessage(pm) => self.process_protocol(pm.into(), commit_allowed),
             MlsMessageBodyIn::PublicMessage(pm) => self.process_protocol(pm.into(), commit_allowed),
@@ -411,7 +438,7 @@ impl MlsClient {
         let group_id = pm.group_id().as_slice().to_vec();
         let mut group = self.load(&group_id)?;
         let processed = group.process_message(&self.provider, pm).map_err(mls_err)?;
-        let sender = MemberIdentity::from_credential(processed.credential())?;
+        let sender = self.normalize(MemberIdentity::from_credential(processed.credential())?);
         match processed.into_content() {
             ProcessedMessageContent::ApplicationMessage(app) => {
                 Ok(Incoming::Application { group_id, sender, plaintext: Zeroizing::new(app.into_bytes()) })
@@ -422,7 +449,7 @@ impl MlsClient {
                 }
                 let removed_self = staged.self_removed();
                 group.merge_staged_commit(&self.provider, *staged).map_err(mls_err)?;
-                let members = if removed_self { Vec::new() } else { members_of(&group)? };
+                let members = if removed_self { Vec::new() } else { self.normalize_members(members_of(&group)?) };
                 Ok(Incoming::Committed { group_id, sender, members, removed_self })
             }
             ProcessedMessageContent::ProposalMessage(p) => {
@@ -513,6 +540,16 @@ mod tests {
     fn identity_encoding() {
         let id = MemberIdentity { username: "alice".into(), device_id: Uuid::new_v4() };
         assert_eq!(MemberIdentity::decode(&id.encode()).unwrap(), id);
+        // Normalisation selon le site de l'appareil.
+        let mut c =
+            MlsClient::create(MemberIdentity { username: "bob@site-a".into(), device_id: Uuid::new_v4() }).unwrap();
+        let q = |u: &str| MemberIdentity { username: u.into(), device_id: id.device_id };
+        assert_eq!(c.normalize(q("alice@site-a")).username, "alice@site-a", "sans site déclaré : inchangé");
+        c.set_home_site(Some("site-a".into()));
+        assert_eq!(c.normalize(q("alice@site-a")).username, "alice");
+        assert_eq!(c.normalize(q("alice@site-b")).username, "alice@site-b");
+        assert_eq!(c.normalize(q("alice@xsite-a")).username, "alice@xsite-a");
+        assert_eq!(c.normalize(q("alice")).username, "alice");
         assert!(MemberIdentity::decode(b"sans-separateur").is_err());
     }
 

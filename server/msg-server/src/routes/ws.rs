@@ -30,12 +30,21 @@ pub async fn ticket(State(st): State<AppState>, Extension(ctx): Extension<AuthCo
     let (ticket, hash) = crate::passwords::new_token()?;
     let now = crate::now();
     let expires_at = now + TICKET_TTL_SECS;
-    let mut map = st.inner.ws_tickets.lock().unwrap_or_else(|e| e.into_inner());
-    map.retain(|_, (_, exp)| *exp > now);
-    if map.len() > 100_000 {
+    // Partagé entre instances : le ticket peut être présenté à une autre.
+    sqlx::query("DELETE FROM ws_tickets WHERE expires_at <= $1").bind(now).execute(st.db()).await?;
+    let (pending,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ws_tickets WHERE device_id = $1")
+        .bind(ctx.device_id)
+        .fetch_one(st.db())
+        .await?;
+    if pending >= 10 {
         return Err(AppError::new(StatusCode::TOO_MANY_REQUESTS, ErrorCode::RateLimited, "trop de tickets"));
     }
-    map.insert(hash, (ctx, expires_at));
+    sqlx::query("INSERT INTO ws_tickets (ticket_hash, device_id, expires_at) VALUES ($1, $2, $3)")
+        .bind(hash)
+        .bind(ctx.device_id)
+        .bind(expires_at)
+        .execute(st.db())
+        .await?;
     Ok(Json(WsTicket { ticket, expires_at }))
 }
 
@@ -50,12 +59,19 @@ pub async fn connect_with_ticket(
     State(st): State<AppState>,
     Query(q): Query<TicketQuery>,
 ) -> Response {
-    let entry = st.inner.ws_tickets.lock().unwrap_or_else(|e| e.into_inner()).remove(&token_hash(&q.ticket));
-    match entry {
-        Some((ctx, exp)) if exp > crate::now() => {
-            ws.max_message_size(4096).on_upgrade(move |socket| run(socket, st, ctx))
-        }
-        _ => AppError::unauthorized().into_response(),
+    let row: Result<Option<(uuid::Uuid,)>, _> =
+        sqlx::query_as("DELETE FROM ws_tickets WHERE ticket_hash = $1 AND expires_at > $2 RETURNING device_id")
+            .bind(token_hash(&q.ticket))
+            .bind(crate::now())
+            .fetch_optional(st.db())
+            .await;
+    let ctx = match row {
+        Ok(Some((device,))) => crate::auth::context_for_device(&st, device).await.ok().flatten(),
+        _ => None,
+    };
+    match ctx {
+        Some(ctx) => ws.max_message_size(4096).on_upgrade(move |socket| run(socket, st, ctx)),
+        None => AppError::unauthorized().into_response(),
     }
 }
 
@@ -65,6 +81,7 @@ async fn notify(socket: &mut WebSocket) -> bool {
 }
 
 async fn run(mut socket: WebSocket, st: AppState, ctx: AuthContext) {
+    let _guard = crate::metrics::WsGuard::new(&st);
     let mut rx = st.inner.hub.subscribe();
     if matches!(crate::routes::messages::has_pending(&st, ctx.device_id).await, Ok(true)) && !notify(&mut socket).await
     {
@@ -74,7 +91,7 @@ async fn run(mut socket: WebSocket, st: AppState, ctx: AuthContext) {
     loop {
         tokio::select! {
             ev = rx.recv() => match ev {
-                Ok(dev) if dev == ctx.device_id => if !notify(&mut socket).await { return },
+                Ok(dev) if dev == ctx.device_id || dev == crate::notify::EVERYONE => if !notify(&mut socket).await { return },
                 Ok(_) => {}
                 Err(RecvError::Lagged(_)) => if !notify(&mut socket).await { return },
                 Err(RecvError::Closed) => return,

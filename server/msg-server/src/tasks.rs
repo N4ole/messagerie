@@ -16,6 +16,8 @@ pub async fn cleanup_once(st: &AppState) -> Result<(), sqlx::Error> {
     // Demandes de liaison expirées (une demande approuvée non récupérée
     // laisse l'appareil enregistré ; il pourra être révoqué).
     sqlx::query("DELETE FROM link_requests WHERE expires_at < $1").bind(now).execute(db).await?;
+    sqlx::query("DELETE FROM ws_tickets WHERE expires_at < $1").bind(now).execute(db).await?;
+    sqlx::query("DELETE FROM federation_nonces WHERE seen_at < $1").bind(now - 600).execute(db).await?;
     sqlx::query("DELETE FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.blob_id = b.id)")
         .execute(db)
         .await?;
@@ -23,6 +25,23 @@ pub async fn cleanup_once(st: &AppState) -> Result<(), sqlx::Error> {
 }
 
 pub fn spawn(st: AppState) {
+    // Fédération : remise des messages en file et témoin KT des sites pairs.
+    let fed = st.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(10));
+        let mut n: u64 = 0;
+        loop {
+            tick.tick().await;
+            if let Err(e) = crate::federation::outbox::deliver_due(&fed).await {
+                tracing::warn!(error = %e.message, "file de fédération");
+            }
+            // Témoin KT toutes les 5 minutes.
+            if n.is_multiple_of(30) && !fed.cfg().federation_peers.is_empty() {
+                crate::federation::witness::check_all(&fed).await;
+            }
+            n += 1;
+        }
+    });
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(300));
         loop {

@@ -140,9 +140,15 @@ async fn authentication_rules() {
     let too_short = &password()[..11];
     assert!(Client::activate(&cfg, "dave", &r.activation_code, too_short).await.is_err());
 
-    // Rejeu du code TOTP déjà utilisé à l'enrôlement : refusé.
+    // Rejeu du code TOTP déjà utilisé à l'enrôlement (même pas de temps,
+    // lu en base pour ne pas dépendre de l'horloge) : refusé.
     drop(alice);
-    let e = Client::login(&alice_cfg, "alice", password(), Some(&totp_code(&alice_totp, 0))).await.err().unwrap();
+    let (step,): (Option<i64>,) = sqlx::query_as("SELECT totp_last_step FROM accounts WHERE username = 'alice'")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    let used = common::totp_code_at(&alice_totp, step.unwrap() * 30);
+    let e = Client::login(&alice_cfg, "alice", password(), Some(&used)).await.err().unwrap();
     assert_eq!(e.api_code(), Some(ErrorCode::InvalidCredentials));
 
     // Suspension : sessions révoquées, connexion refusée.
@@ -381,6 +387,31 @@ async fn group_lifecycle() {
     alice.send_text(&g.id, "à deux").await.unwrap();
     assert_eq!(dave.sync().await.unwrap().new_messages, 1);
     assert!(alice.leave_group(&g.id).await.is_err(), "l'administrateur ne peut pas partir");
+
+    // Transfert d'administration : seul l'administrateur en place le peut,
+    // vers un membre ; l'ancien administrateur peut alors partir et le
+    // nouveau valide son départ et gère les membres.
+    assert!(dave.transfer_admin(&g.id, "dave").await.is_err());
+    assert!(dave.transfer_admin(&g.id, "alice").await.is_err(), "réservé à l'administrateur");
+    assert!(alice.transfer_admin(&g.id, "bob").await.is_err(), "bob n'est plus membre");
+    let t = alice.transfer_admin(&g.id, "dave").await.unwrap();
+    assert_eq!((t.admin.as_deref(), t.is_admin), (Some("dave"), false));
+    dave.sync().await.unwrap();
+    let v = dave.conversation(&g.id).unwrap();
+    assert_eq!((v.admin.as_deref(), v.is_admin), (Some("dave"), true));
+    assert!(alice.add_member(&g.id, "bob").await.is_err(), "l'ancien administrateur ne gère plus le groupe");
+    alice.leave_group(&g.id).await.unwrap();
+    dave.sync().await.unwrap();
+    assert_eq!(dave.conversation(&g.id).unwrap().members, vec!["dave"]);
+    alice.sync().await.unwrap();
+    assert_eq!(alice.conversation(&g.id).unwrap().status, "removed");
+    let g3 = dave.add_member(&g.id, "carol").await.unwrap();
+    assert_eq!(g3.members, vec!["carol", "dave"]);
+    carol.sync().await.unwrap();
+    let vc = carol.conversation(&g.id).unwrap();
+    assert_eq!((vc.admin.as_deref(), vc.status.as_str()), (Some("dave"), "ok"));
+    dave.send_text(&g.id, "nouvelle équipe").await.unwrap();
+    assert_eq!(carol.sync().await.unwrap().new_messages, 1);
 }
 
 /// Messages éphémères et rotation des clés.

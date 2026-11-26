@@ -270,6 +270,17 @@ impl LocalStore {
         Ok(())
     }
 
+    /// Nouvelle invitation dans un groupe quitté (ou dont on a été retiré) :
+    /// l'administrateur mémorisé est oublié (il a pu changer) et sera fixé
+    /// par l'annonce suivante. Sans effet sur une conversation active.
+    pub fn rejoin_conversation(&self, group_id: &[u8], status: &str) -> Result<()> {
+        self.c().execute(
+            "UPDATE conversations SET admin = NULL, status = ?2 WHERE group_id = ?1 AND status IN ('removed', 'left')",
+            params![group_id, status],
+        )?;
+        Ok(())
+    }
+
     pub fn set_status(&self, group_id: &[u8], status: &str) -> Result<()> {
         self.c().execute("UPDATE conversations SET status = ?2 WHERE group_id = ?1", params![group_id, status])?;
         Ok(())

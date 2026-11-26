@@ -98,6 +98,58 @@ jobs:
           path: dist/
           retention-days: 7
 
+  deploy:
+    name: Déploiement — Helm, sauvegarde et reprise
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Outils (age, client PostgreSQL)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends age postgresql-client
+      - name: Chaîne Rust (rust-toolchain.toml)
+        run: rustup toolchain install && rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo build --locked -p msg-server
+      - name: Exercice de reprise (sauvegarde chiffrée → restauration vérifiée)
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          MSG_SERVER_BIN: ${{ github.workspace }}/target/debug/msg-server
+        run: sh deploy/backup/test-restore.sh
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+      - name: kubeconform (empreinte vérifiée)
+        run: |
+          curl -sSfLo /tmp/kc.tgz https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz
+          echo "c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3  /tmp/kc.tgz" | sha256sum -c
+          tar -xzf /tmp/kc.tgz -C /usr/local/bin kubeconform
+      - name: Chart Helm (lint + validation des manifestes, CRD comprises)
+        run: |
+          helm lint deploy/helm/messagerie
+          helm template t deploy/helm/messagerie --kube-version 1.31.0 -f deploy/helm/messagerie/ci-values.yaml > /tmp/all.yaml
+          helm template t deploy/helm/messagerie --kube-version 1.31.0 > /tmp/default.yaml
+          kubeconform -strict -summary -kubernetes-version 1.31.0 -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            /tmp/all.yaml /tmp/default.yaml
+      - name: Systemd (unités)
+        run: |
+          sudo install -m 0755 target/debug/msg-server /usr/local/bin/msg-server
+          systemd-analyze verify --man=no deploy/vm/msg-server@.service deploy/vm/msg-server-backup.timer
+      - name: Règles Prometheus
+        run: |
+          docker run --rm -v "$PWD/deploy/monitoring:/m:ro" --entrypoint promtool prom/prometheus:v3.5.0 check rules /m/alerts.yml
+
   interop:
     name: Interopérabilité desktop ↔ web (Chromium)
     runs-on: ubuntu-24.04

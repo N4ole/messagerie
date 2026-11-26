@@ -140,6 +140,22 @@ async fn revoked_or_unknown(
     }
 }
 
+/// Contexte d'un appareil actif (ouverture d'un WebSocket par ticket).
+pub async fn context_for_device(st: &AppState, device_id: Uuid) -> AppResult<Option<AuthContext>> {
+    let row: Option<(i64, String, String, String)> = sqlx::query_as(
+        "SELECT a.id, a.username, a.role, a.status FROM devices d JOIN accounts a ON a.id = d.account_id
+          WHERE d.id = $1",
+    )
+    .bind(device_id)
+    .fetch_optional(st.db())
+    .await?;
+    let Some((account_id, username, role, status)) = row else { return Ok(None) };
+    if status != AccountStatus::Active.as_str() {
+        return Ok(None);
+    }
+    Ok(Some(AuthContext { device_id, account_id, username, role: Role::parse(&role).ok_or_else(AppError::internal)? }))
+}
+
 async fn buffer(req: Request) -> AppResult<(axum::http::request::Parts, axum::body::Bytes)> {
     let (parts, body) = req.into_parts();
     // Seul le téléversement de pièces jointes accepte un corps volumineux.

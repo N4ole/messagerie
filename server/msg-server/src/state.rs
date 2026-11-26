@@ -25,10 +25,12 @@ pub struct Inner {
     pub hub: broadcast::Sender<Uuid>,
     /// Vérificateur WebAuthn (absent si non configuré).
     pub webauthn: Option<Webauthn>,
+    /// Client HTTP des appels vers les sites pairs (fédération).
+    pub federation_http: reqwest::Client,
     /// Répertoire Key Transparency, chargé à la première utilisation.
     pub kt: tokio::sync::Mutex<Option<msg_kt::KtDirectory>>,
-    /// Tickets WebSocket du client web (haché → contexte, expiration).
-    pub ws_tickets: Mutex<HashMap<Vec<u8>, (crate::auth::AuthContext, i64)>>,
+    /// Métriques agrégées de cette instance (sans données personnelles).
+    pub metrics: crate::metrics::Metrics,
     send_rate: Mutex<HashMap<Uuid, (i64, u32)>>,
 }
 
@@ -40,6 +42,7 @@ impl AppState {
     pub fn try_new(db: PgPool, cfg: Config) -> anyhow::Result<Self> {
         let secrets = ServerSecrets::derive(&cfg.server_secret);
         let (hub, _) = broadcast::channel(4096);
+        let federation_http = crate::federation::client::http_client(cfg.federation_proxy.as_deref())?;
         let webauthn = match &cfg.webauthn {
             Some(w) => {
                 let origin = url::Url::parse(&w.origin)?;
@@ -52,18 +55,22 @@ impl AppState {
             }
             None => None,
         };
-        Ok(Self {
+        let st = Self {
             inner: Arc::new(Inner {
                 db,
                 cfg,
                 secrets,
                 hub,
                 webauthn,
+                federation_http,
                 kt: tokio::sync::Mutex::new(None),
-                ws_tickets: Mutex::new(HashMap::new()),
+                metrics: Default::default(),
                 send_rate: Mutex::new(HashMap::new()),
             }),
-        })
+        };
+        // Notifications des autres instances (si un runtime Tokio est actif).
+        crate::notify::spawn_listener(st.clone());
+        Ok(st)
     }
 
     pub fn db(&self) -> &PgPool {
