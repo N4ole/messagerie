@@ -16,6 +16,7 @@ pub async fn cleanup_once(st: &AppState) -> Result<(), sqlx::Error> {
     // Demandes de liaison expirées (une demande approuvée non récupérée
     // laisse l'appareil enregistré ; il pourra être révoqué).
     sqlx::query("DELETE FROM link_requests WHERE expires_at < $1").bind(now).execute(db).await?;
+    sqlx::query("DELETE FROM ws_tickets WHERE expires_at < $1").bind(now).execute(db).await?;
     sqlx::query("DELETE FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.blob_id = b.id)")
         .execute(db)
         .await?;

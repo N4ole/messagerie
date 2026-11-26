@@ -108,6 +108,23 @@ pub fn totp_code(base32: &str, offset_steps: i64) -> String {
 }
 
 impl TestServer {
+    /// Démarre une seconde instance du serveur sur la même base (même
+    /// configuration) et renvoie son URL.
+    pub async fn second_instance(&self) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app = router(AppState::try_new(self.pool.clone(), self.server_cfg.clone()).expect("configuration"));
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        url
+    }
+
+    /// Configuration cliente pointant vers une URL donnée (autre instance).
+    pub fn config_for(&mut self, url: &str) -> ClientConfig {
+        let mut c = self.config();
+        c.server_url = url.to_owned();
+        c
+    }
+
     pub fn config(&mut self) -> ClientConfig {
         let d = tempfile::tempdir().unwrap();
         let mut c = ClientConfig::new(self.url.clone(), d.path());

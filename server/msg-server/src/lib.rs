@@ -7,6 +7,7 @@ pub mod config;
 pub mod error;
 pub mod kt;
 pub mod logging;
+pub mod notify;
 pub mod passwords;
 pub mod routes;
 pub mod secrets;

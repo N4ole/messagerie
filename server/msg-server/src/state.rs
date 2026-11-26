@@ -27,8 +27,6 @@ pub struct Inner {
     pub webauthn: Option<Webauthn>,
     /// Répertoire Key Transparency, chargé à la première utilisation.
     pub kt: tokio::sync::Mutex<Option<msg_kt::KtDirectory>>,
-    /// Tickets WebSocket du client web (haché → contexte, expiration).
-    pub ws_tickets: Mutex<HashMap<Vec<u8>, (crate::auth::AuthContext, i64)>>,
     send_rate: Mutex<HashMap<Uuid, (i64, u32)>>,
 }
 
@@ -52,7 +50,7 @@ impl AppState {
             }
             None => None,
         };
-        Ok(Self {
+        let st = Self {
             inner: Arc::new(Inner {
                 db,
                 cfg,
@@ -60,10 +58,12 @@ impl AppState {
                 hub,
                 webauthn,
                 kt: tokio::sync::Mutex::new(None),
-                ws_tickets: Mutex::new(HashMap::new()),
                 send_rate: Mutex::new(HashMap::new()),
             }),
-        })
+        };
+        // Notifications des autres instances (si un runtime Tokio est actif).
+        crate::notify::spawn_listener(st.clone());
+        Ok(st)
     }
 
     pub fn db(&self) -> &PgPool {

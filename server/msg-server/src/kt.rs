@@ -26,20 +26,36 @@ fn kt_err(e: msg_kt::KtError) -> AppError {
     AppError::internal()
 }
 
-/// Reconstruit le répertoire en rejouant le journal, en vérifiant chaque racine.
-async fn load(st: &AppState) -> AppResult<KtDirectory> {
-    let dir = KtDirectory::new(*st.inner.secrets.kt_vrf_seed).await.map_err(kt_err)?;
-    let rows: Vec<(i64, String, Vec<u8>)> =
-        sqlx::query_as("SELECT epoch, entries, root_hash FROM kt_log ORDER BY epoch").fetch_all(st.db()).await?;
-    if rows.is_empty() {
-        // Premier démarrage (ou base de Phase 2) : publier tous les comptes.
-        sqlx::query(
-            "INSERT INTO kt_dirty (username) SELECT username FROM accounts WHERE identity_key IS NOT NULL
-             ON CONFLICT DO NOTHING",
-        )
-        .execute(st.db())
-        .await?;
+/// Clé du verrou consultatif PostgreSQL qui sérialise les publications
+/// entre instances du serveur (un seul écrivain du journal à la fois).
+const KT_LOCK_KEY: i64 = 0x6b74_5f6c_6f67; // « kt_log »
+
+/// Met le répertoire en mémoire à jour avec le journal en base : création
+/// (premier usage) puis rejeu des époques publiées depuis, éventuellement
+/// par une autre instance. Chaque racine recalculée doit égaler la racine
+/// journalisée, sinon le journal est refusé.
+async fn sync_dir(st: &AppState, slot: &mut Option<KtDirectory>) -> AppResult<()> {
+    if slot.is_none() {
+        let dir = KtDirectory::new(*st.inner.secrets.kt_vrf_seed).await.map_err(kt_err)?;
+        let (logged,): (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM kt_log)").fetch_one(st.db()).await?;
+        if !logged {
+            // Premier démarrage (ou base de Phase 2) : publier tous les comptes.
+            sqlx::query(
+                "INSERT INTO kt_dirty (username) SELECT username FROM accounts WHERE identity_key IS NOT NULL
+                 ON CONFLICT DO NOTHING",
+            )
+            .execute(st.db())
+            .await?;
+        }
+        *slot = Some(dir);
     }
+    let dir = slot.as_ref().ok_or_else(AppError::internal)?;
+    let (current, _) = dir.head().await.map_err(kt_err)?;
+    let rows: Vec<(i64, String, Vec<u8>)> =
+        sqlx::query_as("SELECT epoch, entries, root_hash FROM kt_log WHERE epoch > $1 ORDER BY epoch")
+            .bind(current as i64)
+            .fetch_all(st.db())
+            .await?;
     for (epoch, entries, root) in rows {
         let batch: Vec<(String, String)> = serde_json::from_str(&entries).map_err(|e| anyhow::anyhow!(e))?;
         let batch: Vec<(String, Vec<u8>)> = batch
@@ -47,13 +63,17 @@ async fn load(st: &AppState) -> AppResult<KtDirectory> {
             .map(|(u, v)| hex::decode(v).map(|v| (u, v)))
             .collect::<Result<_, _>>()
             .map_err(|e| anyhow::anyhow!(e))?;
-        let (e, r) = dir.publish(&batch).await.map_err(kt_err)?;
-        if e != epoch as u64 || r != root {
-            tracing::error!(epoch, "journal Key Transparency incohérent : rejeu refusé");
-            return Err(AppError::internal());
+        let replayed = dir.publish(&batch).await.map_err(kt_err);
+        match replayed {
+            Ok((e, r)) if e == epoch as u64 && r == root => {}
+            _ => {
+                tracing::error!(epoch, "journal Key Transparency incohérent : rejeu refusé");
+                *slot = None;
+                return Err(AppError::internal());
+            }
         }
     }
-    Ok(dir)
+    Ok(())
 }
 
 /// (appareil, clé API, clé MLS, date du certificat, signature du certificat)
@@ -89,11 +109,12 @@ async fn current_value(st: &AppState, username: &str) -> AppResult<Vec<u8>> {
 /// Publie dans une nouvelle époque tous les comptes en attente.
 pub async fn flush(st: &AppState) -> AppResult<()> {
     let mut guard = st.inner.kt.lock().await;
-    if guard.is_none() {
-        *guard = Some(load(st).await?);
-    }
-    let dir = guard.as_ref().ok_or_else(AppError::internal)?;
     let mut tx = st.db().begin().await?;
+    // Un seul écrivain parmi toutes les instances ; le verrou est libéré à
+    // la fin de la transaction.
+    sqlx::query("SELECT pg_advisory_xact_lock($1)").bind(KT_LOCK_KEY).execute(&mut *tx).await?;
+    sync_dir(st, &mut guard).await?;
+    let dir = guard.as_ref().ok_or_else(AppError::internal)?;
     let dirty: Vec<(String,)> =
         sqlx::query_as("SELECT username FROM kt_dirty ORDER BY username FOR UPDATE").fetch_all(&mut *tx).await?;
     if dirty.is_empty() {
@@ -137,16 +158,15 @@ pub async fn lookup(st: &AppState, username: &str) -> AppResult<Option<KtLookup>
         flush(st).await?;
     }
     let mut guard = st.inner.kt.lock().await;
-    if guard.is_none() {
-        *guard = Some(load(st).await?);
-    }
+    sync_dir(st, &mut guard).await?;
     let dir = guard.as_ref().ok_or_else(AppError::internal)?;
     Ok(dir.lookup(username).await.ok())
 }
 
 pub async fn head(st: &AppState) -> AppResult<KtHead> {
     flush(st).await?;
-    let guard = st.inner.kt.lock().await;
+    let mut guard = st.inner.kt.lock().await;
+    sync_dir(st, &mut guard).await?;
     let dir = guard.as_ref().ok_or_else(AppError::internal)?;
     let (epoch, root_hash) = dir.head().await.map_err(kt_err)?;
     Ok(KtHead { epoch, root_hash, vrf_public_key: dir.vrf_public_key().to_vec() })
@@ -166,9 +186,7 @@ pub async fn audit(st: &AppState, from: u64, to: u64) -> AppResult<KtAudit> {
         return Err(AppError::not_found());
     }
     let mut guard = st.inner.kt.lock().await;
-    if guard.is_none() {
-        *guard = Some(load(st).await?);
-    }
+    sync_dir(st, &mut guard).await?;
     let dir = guard.as_ref().ok_or_else(AppError::internal)?;
     let proof = dir.audit(from, to).await.map_err(kt_err)?;
     Ok(KtAudit { from_epoch: from, to_epoch: to, roots: roots.into_iter().map(|(r,)| KtRoot(r)).collect(), proof })

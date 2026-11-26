@@ -68,9 +68,7 @@ pub async fn send(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    for r in &recipients {
-        let _ = st.inner.hub.send(*r);
-    }
+    crate::notify::deliveries(&st, &recipients).await;
     Ok(Json(SendResponse { accepted: recipients.len() }))
 }
 
