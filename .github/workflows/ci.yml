@@ -150,6 +150,51 @@ jobs:
         run: |
           docker run --rm -v "$PWD/deploy/monitoring:/m:ro" --entrypoint promtool prom/prometheus:v3.5.0 check rules /m/alerts.yml
 
+  zap:
+    name: Scan ZAP de l'API (actif)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Chaîne Rust (rust-toolchain.toml)
+        run: rustup toolchain install && rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo build --locked -p msg-server
+      - name: Serveur réel
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          MSG_SITE_NAME: zap.example
+        run: |
+          MSG_SERVER_SECRET=$(openssl rand -hex 32) nohup target/debug/msg-server serve --bind 127.0.0.1:18080 > server.log 2>&1 &
+          timeout 60 sh -c 'until curl -sf http://127.0.0.1:18080/v1/health > /dev/null; do sleep 1; done'
+      - name: ZAP — scan actif à partir de la description OpenAPI (échec au moindre avertissement)
+        run: |
+          mkdir -m 777 zap
+          sed 's#http://127.0.0.1:8080#http://127.0.0.1:18080#' docs/api/openapi.yaml > zap/openapi.yaml
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" zaproxy/zap-stable@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af \
+            zap-api-scan.py -t /zap/wrk/openapi.yaml -f openapi -r rapport.html -J rapport.json
+      - name: Aucune erreur serveur ni panique pendant le scan
+        run: |
+          sed 's/\x1b\[[0-9;]*m//g' server.log | grep -o 'status=[0-9]*' | sort | uniq -c
+          ! sed 's/\x1b\[[0-9;]*m//g' server.log | grep -E 'status=5[0-9][0-9]|panicked'
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rapport-zap
+          path: zap/rapport.*
+          retention-days: 30
+
   interop:
     name: Interopérabilité desktop ↔ web (Chromium)
     runs-on: ubuntu-24.04
