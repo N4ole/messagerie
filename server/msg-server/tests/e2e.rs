@@ -387,6 +387,31 @@ async fn group_lifecycle() {
     alice.send_text(&g.id, "à deux").await.unwrap();
     assert_eq!(dave.sync().await.unwrap().new_messages, 1);
     assert!(alice.leave_group(&g.id).await.is_err(), "l'administrateur ne peut pas partir");
+
+    // Transfert d'administration : seul l'administrateur en place le peut,
+    // vers un membre ; l'ancien administrateur peut alors partir et le
+    // nouveau valide son départ et gère les membres.
+    assert!(dave.transfer_admin(&g.id, "dave").await.is_err());
+    assert!(dave.transfer_admin(&g.id, "alice").await.is_err(), "réservé à l'administrateur");
+    assert!(alice.transfer_admin(&g.id, "bob").await.is_err(), "bob n'est plus membre");
+    let t = alice.transfer_admin(&g.id, "dave").await.unwrap();
+    assert_eq!((t.admin.as_deref(), t.is_admin), (Some("dave"), false));
+    dave.sync().await.unwrap();
+    let v = dave.conversation(&g.id).unwrap();
+    assert_eq!((v.admin.as_deref(), v.is_admin), (Some("dave"), true));
+    assert!(alice.add_member(&g.id, "bob").await.is_err(), "l'ancien administrateur ne gère plus le groupe");
+    alice.leave_group(&g.id).await.unwrap();
+    dave.sync().await.unwrap();
+    assert_eq!(dave.conversation(&g.id).unwrap().members, vec!["dave"]);
+    alice.sync().await.unwrap();
+    assert_eq!(alice.conversation(&g.id).unwrap().status, "removed");
+    let g3 = dave.add_member(&g.id, "carol").await.unwrap();
+    assert_eq!(g3.members, vec!["carol", "dave"]);
+    carol.sync().await.unwrap();
+    let vc = carol.conversation(&g.id).unwrap();
+    assert_eq!((vc.admin.as_deref(), vc.status.as_str()), (Some("dave"), "ok"));
+    dave.send_text(&g.id, "nouvelle équipe").await.unwrap();
+    assert_eq!(carol.sync().await.unwrap().new_messages, 1);
 }
 
 /// Messages éphémères et rotation des clés.

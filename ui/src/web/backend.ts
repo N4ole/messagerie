@@ -34,6 +34,7 @@ export interface WebAppApi {
   createGroup(name: string, members: string[]): Promise<unknown>;
   addMember(id: string, username: string): Promise<unknown>;
   removeMember(id: string, username: string): Promise<unknown>;
+  transferAdmin(id: string, username: string): Promise<unknown>;
   leaveGroup(id: string): Promise<unknown>;
   setEphemeral(id: string, ttl: number | null): Promise<unknown>;
   send(id: string, text: string): Promise<unknown>;
@@ -224,6 +225,7 @@ export function createWebBackend(app: WebAppApi, kv: SyncKv, opts: WebOptions = 
     createGroup: (name, members) => persist<Conversation>(app.createGroup(name, members)),
     addMember: (id, u) => persist<Conversation>(app.addMember(id, u)),
     removeMember: (id, u) => persist<Conversation>(app.removeMember(id, u)),
+    transferAdmin: (id, u) => persist<Conversation>(app.transferAdmin(id, u)),
     leaveGroup: (id) => persist<void>(app.leaveGroup(id)),
     setEphemeral: (id, ttl) => persist<void>(app.setEphemeral(id, ttl)),
     send: (id, text) => persist<Message>(app.send(id, text)),

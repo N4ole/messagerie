@@ -6,6 +6,8 @@
 //! (son créateur) — émet les commits. Les autres membres envoient des
 //! *propositions* (rotation, départ) que l'administrateur valide. Le serveur
 //! n'ordonnant pas les commits, cette règle évite les fourches d'époque.
+//! L'administrateur peut transférer ce rôle à un autre membre (annonce
+//! `GroupInfo` qu'il est seul autorisé à émettre) puis quitter le groupe.
 
 use std::collections::HashMap;
 
@@ -700,6 +702,26 @@ impl Client {
         self.conversation(conversation_id)
     }
 
+    /// Transfère l'administration (seul émetteur de commits) à un autre
+    /// membre. L'annonce est chiffrée dans le groupe ; chaque appareil ne
+    /// l'accepte que de l'administrateur en place. L'ancien administrateur
+    /// cesse aussitôt d'émettre des commits et peut ensuite quitter le groupe.
+    pub async fn transfer_admin(&mut self, conversation_id: &str, username: &str) -> Result<ConversationView> {
+        let c = self.active_conversation(conversation_id)?;
+        self.require_admin(&c)?;
+        if username == self.username {
+            return Err(ClientError::Invalid("vous êtes déjà administrateur".into()));
+        }
+        if !usernames(&self.mls.members(&c.group_id)?).iter().any(|u| u == username) {
+            return Err(ClientError::Invalid("cet utilisateur n'est pas membre du groupe".into()));
+        }
+        let name = c.name.clone().unwrap_or_default();
+        self.send_app(&c.group_id, AppBody::GroupInfo { name: name.clone(), admin: self.wire_name(username) }, None)
+            .await?;
+        self.store.set_group_info(&c.group_id, &name, username)?;
+        self.conversation(conversation_id)
+    }
+
     /// Quitte un groupe : proposition de départ validée par l'administrateur.
     pub async fn leave_group(&mut self, conversation_id: &str) -> Result<()> {
         let c = self.store.conversation(&decode_id(conversation_id)?)?.ok_or(ClientError::UnknownConversation)?;
@@ -708,7 +730,7 @@ impl Client {
         }
         if self.effective_admin(&c).as_deref() == Some(self.username.as_str()) {
             return Err(ClientError::Invalid(
-                "l'administrateur ne peut pas quitter le groupe (transfert d'administration non pris en charge en Phase 2)".into(),
+                "l'administrateur doit d'abord transférer l'administration à un autre membre".into(),
             ));
         }
         let proposal = self.mls.propose_leave(&c.group_id)?;
@@ -921,6 +943,7 @@ impl Client {
                     return Err(ClientError::Invalid("groupe sans autre membre".into()));
                 }
                 self.store.insert_conversation(&conv)?;
+                self.store.rejoin_conversation(&group_id, &conv.status)?;
                 Ok(Handled {
                     conversation: Some(hex::encode(group_id)),
                     identity_changes: outcome.changed,
@@ -971,8 +994,20 @@ impl Client {
                     AppBody::Text { text } => ("text", text, None),
                     AppBody::GroupInfo { name, admin } => {
                         let admin = self.local_name(&admin);
-                        // Seul l'administrateur annonce les informations du groupe.
-                        if sender.username != admin || c.admin.as_deref().is_some_and(|a| a != admin) {
+                        // Seul l'administrateur en place annonce les informations
+                        // du groupe : il se désigne lui-même, ou désigne un autre
+                        // membre (transfert). Avant toute annonce (groupe rejoint),
+                        // seul un membre se désignant lui-même est accepté.
+                        let authorized = match c.admin.as_deref() {
+                            Some(current) => sender.username == current,
+                            None => sender.username == admin,
+                        };
+                        let is_member = self
+                            .mls
+                            .members(&group_id)
+                            .map(|m| usernames(&m).contains(&admin))
+                            .unwrap_or(false);
+                        if !authorized || !is_member {
                             return Err(ClientError::Verification(
                                 sender.username,
                                 "informations de groupe non autorisées".into(),

@@ -318,6 +318,11 @@ impl WebApp {
         with_client!(self, |c| to_js(&c.remove_member(&id, &username).await.map_err(cerr)?))
     }
 
+    #[wasm_bindgen(js_name = transferAdmin)]
+    pub fn transfer_admin(&self, id: String, username: String) -> Promise {
+        with_client!(self, |c| to_js(&c.transfer_admin(&id, &username).await.map_err(cerr)?))
+    }
+
     #[wasm_bindgen(js_name = leaveGroup)]
     pub fn leave_group(&self, id: String) -> Promise {
         with_client!(self, |c| {

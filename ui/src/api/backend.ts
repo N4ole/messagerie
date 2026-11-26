@@ -46,6 +46,8 @@ export interface Backend {
   createGroup(name: string, members: string[]): Promise<Conversation>;
   addMember(conversationId: string, username: string): Promise<Conversation>;
   removeMember(conversationId: string, username: string): Promise<Conversation>;
+  /** Transfère l'administration du groupe à un autre membre. */
+  transferAdmin(conversationId: string, username: string): Promise<Conversation>;
   leaveGroup(conversationId: string): Promise<void>;
   setEphemeral(conversationId: string, ttlSeconds: number | null): Promise<void>;
   send(conversationId: string, text: string): Promise<Message>;

@@ -40,6 +40,18 @@ describe("Groupes", () => {
     expect(screen.queryByRole("button", { name: "Quitter" })).toBeNull();
   });
 
+  it("l'administrateur transfère l'administration après confirmation", async () => {
+    const g = conversation({ id: "gg", kind: "group", title: "Équipe", members: ["alice", "bob", "carol"] });
+    const b = renderChat(mockBackend({ conversations: vi.fn(async () => [g]) }));
+    await userEvent.click(await screen.findByRole("button", { name: /Équipe/ }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    await userEvent.click(screen.getByRole("button", { name: "Nommer bob administrateur" }));
+    expect(b.transferAdmin).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Nommer bob administrateur" }));
+    await waitFor(() => expect(b.transferAdmin).toHaveBeenCalledWith("gg", "bob"));
+    confirm.mockRestore();
+  });
+
   it("un membre peut quitter mais pas administrer", async () => {
     const g = conversation({ id: "gg", kind: "group", title: "Équipe", admin: "bob", is_admin: false });
     const b = renderChat(mockBackend({ conversations: vi.fn(async () => [g]) }));

@@ -204,6 +204,16 @@ impl MemStore {
         })
     }
 
+    /// Voir `Store::rejoin_conversation`.
+    pub fn rejoin_conversation(&self, group_id: &[u8], status: &str) -> Result<()> {
+        self.with_conv(group_id, |c| {
+            if c.status == "removed" || c.status == "left" {
+                c.admin = None;
+                c.status = status.into();
+            }
+        })
+    }
+
     pub fn set_status(&self, group_id: &[u8], status: &str) -> Result<()> {
         self.with_conv(group_id, |c| c.status = status.into())
     }

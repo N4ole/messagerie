@@ -22,6 +22,7 @@ declare module "msg-wasm" {
     createGroup(name: string, members: string[]): Promise<unknown>;
     addMember(id: string, username: string): Promise<unknown>;
     removeMember(id: string, username: string): Promise<unknown>;
+    transferAdmin(id: string, username: string): Promise<unknown>;
     leaveGroup(id: string): Promise<unknown>;
     setEphemeral(id: string, ttl: number | null): Promise<unknown>;
     send(id: string, text: string): Promise<unknown>;

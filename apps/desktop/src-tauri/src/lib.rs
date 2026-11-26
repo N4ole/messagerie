@@ -447,6 +447,15 @@ async fn remove_member(
 }
 
 #[tauri::command]
+async fn transfer_admin(
+    conversation_id: String,
+    username: String,
+    state: State<'_, AppState>,
+) -> CmdResult<ConversationView> {
+    Ok(current(&state).await?.lock().await.transfer_admin(&conversation_id, &username).await?)
+}
+
+#[tauri::command]
 async fn leave_group(conversation_id: String, state: State<'_, AppState>) -> CmdResult<()> {
     Ok(current(&state).await?.lock().await.leave_group(&conversation_id).await?)
 }
@@ -820,6 +829,7 @@ pub fn run() {
             create_group,
             add_member,
             remove_member,
+            transfer_admin,
             leave_group,
             set_ephemeral,
             send_message,

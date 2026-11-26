@@ -45,6 +45,7 @@ export const tauriBackend: Backend = {
   createGroup: (name, members) => invoke<Conversation>("create_group", { name, members }),
   addMember: (conversationId, username) => invoke<Conversation>("add_member", { conversationId, username }),
   removeMember: (conversationId, username) => invoke<Conversation>("remove_member", { conversationId, username }),
+  transferAdmin: (conversationId, username) => invoke<Conversation>("transfer_admin", { conversationId, username }),
   leaveGroup: (conversationId) => invoke<void>("leave_group", { conversationId }),
   setEphemeral: (conversationId, ttlS) => invoke<void>("set_ephemeral", { conversationId, ttlS }),
   send: (conversationId, text) => invoke<Message>("send_message", { conversationId, text }),
