@@ -1,0 +1,33 @@
+name: Builds reproductibles
+
+# Deux constructions du même commit (répertoires et horodatages différents)
+# doivent donner un serveur et un module WebAssembly identiques.
+on:
+  pull_request:
+    paths: ["server/**", "crates/**", "Cargo.lock", "rust-toolchain.toml", "scripts/reproducible-build.sh", ".github/workflows/reproducible.yml"]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: repro-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Chaîne Rust (rust-toolchain.toml)
+        run: rustup toolchain install && rustup show
+      - name: Deux constructions et comparaison
+        run: sh scripts/reproducible-build.sh check | tee empreintes.txt
+      - name: Empreintes de référence
+        run: cat empreintes.txt >> "$GITHUB_STEP_SUMMARY"
