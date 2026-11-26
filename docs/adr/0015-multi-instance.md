@@ -19,7 +19,7 @@ nécessaire et répliqué, sert de bus et de verrou.
   l'écoute, une notification générale force les clients à se resynchroniser (aucune
   notification perdue silencieusement). La notification ne contient que des identifiants
   d'appareils, jamais de contenu.
-- **Tickets WebSocket** en base (haché, usage unique, 60 s) : le ticket peut être émis par
+- **Tickets WebSocket** en base (haché, usage unique, 30 s) : le ticket peut être émis par
   une instance et consommé par une autre.
 - **Key Transparency** : publication sous verrou consultatif transactionnel
   (`pg_advisory_xact_lock`) ; avant toute lecture ou publication, chaque instance rejoue les

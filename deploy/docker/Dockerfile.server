@@ -25,9 +25,14 @@ COPY --from=build /src/ui/src/wasm-pkg ./ui/src/wasm-pkg
 RUN pnpm install --frozen-lockfile --filter @messagerie/ui \
  && pnpm --filter @messagerie/ui exec vite build --mode web
 
+# Manifeste d'intégrité du client web, vérifié par le serveur au démarrage.
+FROM build AS manifest
+COPY --from=web /src/ui/dist-web /srv/web
+RUN /msg-server web-manifest /srv/web
+
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /msg-server /usr/local/bin/msg-server
-COPY --from=web /src/ui/dist-web /srv/web
+COPY --from=manifest /srv/web /srv/web
 USER nonroot:nonroot
 EXPOSE 8080
 ENV MSG_BIND=0.0.0.0:8080 MSG_LOG_JSON=1 MSG_WEB_DIR=/srv/web

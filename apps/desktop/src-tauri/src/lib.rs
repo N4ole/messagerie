@@ -27,6 +27,8 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+mod integrity;
+
 type Shared = Arc<Mutex<Client>>;
 
 /// Verrouillage automatique par défaut (minutes d'inactivité).
@@ -46,6 +48,8 @@ struct AppState {
     network: Mutex<(msg_client_core::net::Network, Vec<[u8; 32]>)>,
     /// Tor embarqué (démarré à la demande, conservé ensuite).
     tor: Mutex<Option<msg_tor::TorRuntime>>,
+    /// Résultat de la vérification d'intégrité au démarrage.
+    integrity: std::sync::OnceLock<integrity::Integrity>,
 }
 
 impl Default for AppState {
@@ -60,6 +64,7 @@ impl Default for AppState {
             pending_link: Mutex::new(None),
             network: Mutex::new((msg_client_core::net::Network::Direct, Vec::new())),
             tor: Mutex::new(None),
+            integrity: std::sync::OnceLock::new(),
         }
     }
 }
@@ -138,12 +143,15 @@ struct SecurityStatus {
     capture_protection: String,
     auto_lock_minutes: u32,
     passkeys_supported: bool,
+    executable_sha256: String,
+    signature: String,
 }
 
 fn config(app: &AppHandle, server: &str) -> CmdResult<ClientConfig> {
     let dir = app.path().app_data_dir().map_err(|e| err("error", format!("dossier de données : {e}")))?;
     let mut cfg = ClientConfig::new(server.trim().trim_end_matches('/'), dir);
     let state = app.state::<AppState>();
+    ensure_integrity(&state)?;
     let (network, pins) = state.network.try_lock().map(|g| g.clone()).map_err(|_| err("error", "réseau occupé"))?;
     cfg.network = network;
     cfg.tls_pins = pins;
@@ -191,7 +199,18 @@ async fn configure_network(
     Ok(label)
 }
 
+/// Refuse toute opération si l'exécutable a été modifié après signature.
+fn ensure_integrity(state: &AppState) -> CmdResult<()> {
+    match state.integrity.get() {
+        Some(i) if i.blocked => {
+            Err(err("error", "intégrité de l'application compromise : réinstallez-la depuis la Release officielle"))
+        }
+        _ => Ok(()),
+    }
+}
+
 async fn current(state: &State<'_, AppState>) -> CmdResult<Shared> {
+    ensure_integrity(state)?;
     state.touch();
     state.client.lock().await.as_ref().map(|(c, _)| c.clone()).ok_or(CmdError::from(ClientError::NotLoggedIn))
 }
@@ -398,6 +417,8 @@ fn security_status(state: State<'_, AppState>) -> SecurityStatus {
         capture_protection: state.capture_protection.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         auto_lock_minutes: state.auto_lock_minutes.load(Ordering::Relaxed),
         passkeys_supported: msg_platform_win::webauthn::available(),
+        executable_sha256: state.integrity.get().map(|i| i.executable_sha256.clone()).unwrap_or_default(),
+        signature: state.integrity.get().map(|i| i.signature.clone()).unwrap_or_default(),
     }
 }
 
@@ -807,6 +828,20 @@ pub fn run() {
         .manage(AppState::default())
         .setup(|app| {
             let handle = app.handle().clone();
+            let check = integrity::check();
+            if check.blocked {
+                tracing::error!("signature de l'exécutable invalide : application bloquée");
+                let h = handle.clone();
+                app.dialog()
+                    .message(
+                        "La signature de cet exécutable est invalide : il a été modifié après sa publication. \
+                         Réinstallez Messagerie depuis la Release officielle.",
+                    )
+                    .title("Intégrité compromise")
+                    .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                    .show(move |_| h.exit(1));
+            }
+            let _ = app.state::<AppState>().integrity.set(check);
             let status = protect_main_window(&handle);
             *app.state::<AppState>().capture_protection.lock().unwrap_or_else(|e| e.into_inner()) = status;
             tauri::async_runtime::spawn(auto_lock(handle));

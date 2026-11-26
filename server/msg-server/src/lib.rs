@@ -15,6 +15,7 @@ pub mod routes;
 pub mod secrets;
 pub mod state;
 pub mod tasks;
+pub mod web_integrity;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

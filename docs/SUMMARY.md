@@ -20,6 +20,11 @@
 - [Phase 3 — Réseau et web](phases/phase-3.md)
 - [Phase 4 — Multi-site et infrastructure](phases/phase-4.md)
 
+# Sécurité (Phase 5)
+
+- [Revue OWASP ASVS niveau 2](securite/asvs-l2.md)
+- [Revue des compositions cryptographiques](securite/revue-crypto.md)
+
 # Guides
 
 - [Développement](guides/developpement.md)

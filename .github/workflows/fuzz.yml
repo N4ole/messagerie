@@ -1,0 +1,50 @@
+name: Fuzzing
+
+# Passe courte sur chaque PR touchant un parseur, passe longue chaque semaine.
+on:
+  pull_request:
+    paths: ["crates/**", "fuzz/**", "Cargo.lock", ".github/workflows/fuzz.yml"]
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: cargo-fuzz — ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [markdown, media, app_message, mls_incoming, api_json, key_transparency, signatures]
+    env:
+      # 60 s par cible sur une PR, 30 min lors de la passe hebdomadaire.
+      FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '1800' || '60' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Chaîne nightly (libFuzzer)
+        run: rustup toolchain install nightly --profile minimal
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: fuzz
+          key: ${{ matrix.target }}
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Fuzzing
+        working-directory: fuzz
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=$FUZZ_SECONDS -rss_limit_mb=2048 -timeout=10
+      - name: Cas de plantage (à reproduire avec cargo fuzz run <cible> <fichier>)
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz/artifacts/
+          retention-days: 30

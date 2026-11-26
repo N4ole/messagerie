@@ -17,7 +17,11 @@ use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
 
 /// Dimensions maximales acceptées (côté) et mémoire de décodage.
 pub const MAX_DIMENSION: u32 = 12_000;
-pub const MAX_DECODE_BYTES: u64 = 512 * 1024 * 1024;
+/// Nombre maximal de pixels (≈ 50 Mpx, photos de 48 Mpx comprises), vérifié
+/// **avant** le décodage : un fichier minuscule annonçant une image géante
+/// (bombe de décompression, trouvée par le fuzzing) est refusé d'emblée.
+pub const MAX_PIXELS: u64 = 50_000_000;
+pub const MAX_DECODE_BYTES: u64 = 256 * 1024 * 1024;
 /// Côté maximal d'une miniature et taille cible.
 pub const THUMBNAIL_SIDE: u32 = 320;
 pub const THUMBNAIL_MAX_BYTES: usize = 48 * 1024;
@@ -63,6 +67,10 @@ fn decode(bytes: &[u8], format: ImageFormat) -> Result<DynamicImage, MediaError>
     let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
     reader.limits(limits());
     let mut decoder = reader.into_decoder().map_err(|e| MediaError::Invalid(e.to_string()))?;
+    let (w, h) = decoder.dimensions();
+    if u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return Err(MediaError::Invalid(format!("{w} × {h} pixels (maximum {MAX_PIXELS})")));
+    }
     let orientation = decoder.orientation().ok();
     let mut img = DynamicImage::from_decoder(decoder).map_err(|e| MediaError::Invalid(e.to_string()))?;
     if let Some(o) = orientation {
@@ -244,5 +252,15 @@ mod tests {
     fn mime_guess() {
         assert_eq!(mime_from_name("Rapport.PDF"), "application/pdf");
         assert_eq!(mime_from_name("sans-extension"), "application/octet-stream");
+    }
+
+    /// Régression (fuzzing) : GIF de 150 octets annonçant 11 308 × 11 308 px.
+    #[test]
+    fn decompression_bomb_is_rejected_before_decoding() {
+        let bomb = include_bytes!("../tests/data/gif-bombe.gif");
+        let t = std::time::Instant::now();
+        let e = sanitize_image(bomb).unwrap_err();
+        assert!(e.to_string().contains("pixels"), "{e}");
+        assert!(t.elapsed() < std::time::Duration::from_millis(500), "{:?}", t.elapsed());
     }
 }

@@ -1,0 +1,639 @@
+# Description OpenAPI de l'API v1 (documentation et scan ZAP en CI).
+openapi: 3.0.3
+info:
+  title: Messagerie — API v1
+  version: 0.4.0
+  description: 'API du serveur aveugle. Les routes protégées exigent un jeton d''accès
+    (Authorization: Bearer) ET une requête signée par la clé d''appareil (en-têtes
+    x-msg-device, x-msg-timestamp, x-msg-nonce, x-msg-signature, RFC 9449-like). Les
+    routes /v1/federation/* exigent une signature de site (x-msg-site…).'
+servers:
+- url: http://127.0.0.1:8080
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+    device:
+      type: apiKey
+      in: header
+      name: x-msg-signature
+    site:
+      type: apiKey
+      in: header
+      name: x-msg-site
+paths:
+  /v1/health:
+    get:
+      summary: État du serveur
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security: []
+  /v1/site:
+    get:
+      summary: Informations publiques du site (clé de fédération)
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security: []
+  /web-config.json:
+    get:
+      summary: Configuration du client web
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security: []
+  /v1/auth/activate:
+    post:
+      summary: Activation d'un compte (code à usage unique)
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  example: alice
+                activation_code:
+                  type: string
+                  example: code
+                new_password:
+                  type: string
+                  example: motdepasse-tres-long
+  /v1/auth/confirm-totp:
+    post:
+      summary: Confirmation du TOTP et premier appareil
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  example: alice
+                password:
+                  type: string
+                  example: motdepasse-tres-long
+                totp_code:
+                  type: string
+                  example: '123456'
+  /v1/auth/login:
+    post:
+      summary: Connexion (mot de passe + second facteur)
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  example: alice
+                password:
+                  type: string
+                  example: motdepasse-tres-long
+                totp_code:
+                  type: string
+                  example: '123456'
+  /v1/auth/webauthn/challenge:
+    post:
+      summary: Défi WebAuthn de connexion
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  example: alice
+  /v1/auth/link/start:
+    post:
+      summary: Demande de liaison d'appareil
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  example: alice
+                password:
+                  type: string
+                  example: motdepasse-tres-long
+                totp_code:
+                  type: string
+                  example: '123456'
+  /v1/auth/link/poll:
+    post:
+      summary: Suivi d'une demande de liaison
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                link_id:
+                  type: string
+                  example: 00000000-0000-4000-8000-000000000001
+                poll_secret:
+                  type: string
+                  example: secret
+  /v1/ws/connect:
+    get:
+      summary: WebSocket par ticket
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security: []
+      parameters:
+      - name: ticket
+        in: query
+        required: false
+        schema:
+          type: string
+          example: ticket
+  /v1/auth/refresh:
+    post:
+      summary: Renouvellement du jeton
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+  /v1/auth/logout:
+    post:
+      summary: Déconnexion
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+  /v1/keypackages:
+    post:
+      summary: Dépôt de KeyPackages
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                key_packages:
+                  type: array
+                  example: []
+  /v1/keypackages/count:
+    get:
+      summary: Nombre de KeyPackages
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+  /v1/users/{username}:
+    get:
+      summary: Annuaire
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+          example: bob
+  /v1/users/{username}/claim:
+    post:
+      summary: Réservation de KeyPackages
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+      parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+          example: bob
+  /v1/kt/head:
+    get:
+      summary: Tête du journal Key Transparency
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      parameters:
+      - name: site
+        in: query
+        required: false
+        schema:
+          type: string
+          example: site-b
+  /v1/kt/audit:
+    get:
+      summary: Preuve d'ajout seul
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      parameters:
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+          example: '1'
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: string
+          example: '2'
+  /v1/devices:
+    get:
+      summary: Appareils du compte
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+  /v1/devices/{device_id}:
+    delete:
+      summary: Révocation d'un appareil
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema:
+          type: string
+          example: 00000000-0000-4000-8000-000000000001
+  /v1/messages:
+    post:
+      summary: Envoi d'un message chiffré
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                client_message_id:
+                  type: string
+                  example: 00000000-0000-4000-8000-000000000001
+  /v1/queue:
+    get:
+      summary: File de messages
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+  /v1/queue/ack:
+    post:
+      summary: Acquittement
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: array
+                  example: []
+  /v1/attachments/{id}:
+    get:
+      summary: Pièce jointe chiffrée
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          example: 00000000-0000-4000-8000-000000000001
+  /v1/ws/ticket:
+    post:
+      summary: Ticket WebSocket
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+  /v1/admin/accounts:
+    get:
+      summary: Comptes (administrateur)
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+    post:
+      summary: Création de compte
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  example: carol
+                role:
+                  type: string
+                  example: user
+  /v1/admin/accounts/{username}/status:
+    put:
+      summary: Statut d'un compte
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - device: []
+        bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  example: suspended
+      parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+          example: carol
+  /v1/federation/users/{user}:
+    get:
+      summary: Annuaire (site pair)
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - site: []
+      parameters:
+      - name: user
+        in: path
+        required: true
+        schema:
+          type: string
+          example: bob
+  /v1/federation/deliver:
+    post:
+      summary: Remise fédérée
+      responses:
+        '200':
+          description: succès
+        '400':
+          description: requête invalide
+        '401':
+          description: non authentifié
+      security:
+      - site: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message_id:
+                  type: string
+                  example: 00000000-0000-4000-8000-000000000001
