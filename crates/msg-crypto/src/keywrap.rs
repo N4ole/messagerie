@@ -49,7 +49,17 @@ mod hex_bytes {
     }
 }
 
+/// Bornes des paramètres lus depuis une enveloppe stockée : un fichier
+/// modifié ne peut pas imposer un coût démesuré (déni de service à
+/// l'ouverture). Les paramètres de production restent bien en deçà.
+const MAX_M_KIB: u32 = 1024 * 1024; // 1 Gio
+const MAX_T: u32 = 16;
+const MAX_P: u32 = 16;
+
 fn derive_kek(password: &str, salt: &[u8], p: Argon2Params) -> Result<Zeroizing<[u8; 32]>> {
+    if p.m_kib > MAX_M_KIB || p.t > MAX_T || p.p > MAX_P {
+        return Err(CryptoError::Format("paramètres Argon2 hors bornes".into()));
+    }
     let params = argon2::Params::new(p.m_kib, p.t, p.p, Some(32)).map_err(|e| CryptoError::Format(e.to_string()))?;
     let a2 = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     let mut out = Zeroizing::new([0u8; 32]);
@@ -161,5 +171,14 @@ mod seal_tests {
         assert_eq!(&open(&k, &s, b"ctx").unwrap()[..], b"donnees");
         assert!(open(&k, &s, b"autre").is_err());
         assert!(open(&other, &s, b"ctx").is_err());
+    }
+
+    #[test]
+    fn stored_parameters_are_bounded() {
+        let mut w = wrap(&random_bytes::<32>().unwrap(), "mot de passe", Argon2Params::INSECURE_FOR_TESTS).unwrap();
+        w.params.m_kib = 64 * 1024 * 1024;
+        assert!(matches!(unwrap(&w, "mot de passe"), Err(CryptoError::Format(_))));
+        w.params = Argon2Params { t: 1000, ..Argon2Params::INSECURE_FOR_TESTS };
+        assert!(matches!(unwrap(&w, "mot de passe"), Err(CryptoError::Format(_))));
     }
 }
