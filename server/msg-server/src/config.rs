@@ -39,6 +39,8 @@ pub struct Config {
     /// Fédération : proxy SOCKS pour joindre les sites (ex. Tor :
     /// `socks5h://127.0.0.1:9050`), obligatoire pour les adresses `.onion`.
     pub federation_proxy: Option<String>,
+    /// Jeton porteur facultatif exigé par `/metrics` (`MSG_METRICS_TOKEN`).
+    pub metrics_token: Option<String>,
 }
 
 /// Site pair de la liste blanche.
@@ -126,6 +128,7 @@ impl Config {
             web_onion_only: false,
             federation_peers: Vec::new(),
             federation_proxy: None,
+            metrics_token: None,
         }
     }
 
@@ -165,6 +168,7 @@ impl Config {
             c.federation_peers = load_peers(&json, &c.site_name)?;
         }
         c.federation_proxy = std::env::var("MSG_FEDERATION_PROXY").ok().filter(|s| !s.is_empty());
+        c.metrics_token = std::env::var("MSG_METRICS_TOKEN").ok().filter(|s| !s.is_empty());
         c.web_dir = std::env::var_os("MSG_WEB_DIR").map(Into::into);
         c.web_onion_only = matches!(std::env::var("MSG_WEB_ONION_ONLY").as_deref(), Ok("1" | "true"));
         if c.access_ttl_secs <= 0 || c.session_ttl_secs < c.access_ttl_secs {

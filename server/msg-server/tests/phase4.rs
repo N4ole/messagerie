@@ -216,3 +216,108 @@ async fn federation_requests_are_authenticated() {
     assert_eq!(info.name, "site-b");
     assert_eq!(info.federation_key, a.server_cfg.federation_peers[0].public_key.to_vec());
 }
+
+/// Métriques Prometheus : aucune donnée personnelle (noms, identifiants
+/// d'appareils, de conversations ou de messages, adresses, jetons) et
+/// cardinalité bornée (ensembles d'étiquettes fixes).
+#[tokio::test(flavor = "multi_thread")]
+async fn metrics_contain_no_personal_data() {
+    let (mut a, mut b) = common::spawn_federated().await;
+    let admin_a = a.admin().await;
+    let admin_b = b.admin().await;
+    let (mut alice, _, _) = a.user(&admin_a, "alicemetrique").await;
+    let (mut bob, _, _) = b.user(&admin_b, "bobmetrique").await;
+    let conv = alice.start_conversation("bobmetrique@site-b").await.unwrap();
+    alice.send_text(&conv.id, "contenu des métriques").await.unwrap();
+    wait_for(&mut bob, &conv.id, "contenu des métriques").await;
+    // Requête refusée sur un chemin contenant un identifiant.
+    let r = reqwest::get(format!("{}/v1/users/utilisateurinconnu", a.url)).await.unwrap();
+    assert_eq!(r.status(), 401);
+
+    // Serveur de métriques séparé, protégé par jeton.
+    let mut cfg = a.server_cfg.clone();
+    cfg.metrics_token = Some("jeton-metriques-de-test".into());
+    let st = msg_server::AppState::try_new(a.pool.clone(), cfg).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let murl = format!("http://{}/metrics", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, msg_server::metrics::router(st)).await.unwrap() });
+    let http = reqwest::Client::new();
+    assert_eq!(http.get(&murl).send().await.unwrap().status(), 401);
+    assert_eq!(http.get(&murl).bearer_auth("mauvais").send().await.unwrap().status(), 401);
+    let ok = http.get(&murl).bearer_auth("jeton-metriques-de-test").send().await.unwrap();
+    assert_eq!(ok.status(), 200);
+    assert!(ok.text().await.unwrap().contains("msg_accounts{status=\"active\"}"));
+    // Jamais exposées sur l'API publique.
+    let public = reqwest::get(format!("{}/metrics", a.url)).await.unwrap();
+    assert!(!public.text().await.unwrap_or_default().contains("msg_http_requests_total"));
+
+    let mut identifiers: Vec<String> = vec![
+        "alicemetrique".into(),
+        "bobmetrique".into(),
+        "utilisateurinconnu".into(),
+        "contenu".into(),
+        conv.id.clone(),
+        "127.0.0.1".into(),
+        a.url.trim_start_matches("http://").into(),
+        b.url.trim_start_matches("http://").into(),
+    ];
+    for s in [&a, &b] {
+        let devs: Vec<(uuid::Uuid,)> = sqlx::query_as("SELECT id FROM devices").fetch_all(&s.pool).await.unwrap();
+        identifiers.extend(devs.into_iter().map(|(d,)| d.to_string()));
+        let msgs: Vec<(Option<uuid::Uuid>,)> =
+            sqlx::query_as("SELECT client_message_id FROM blobs").fetch_all(&s.pool).await.unwrap();
+        identifiers.extend(msgs.into_iter().filter_map(|(m,)| m).map(|m| m.to_string()));
+    }
+    let allowed_status = [
+        "101", "200", "201", "204", "304", "400", "401", "403", "404", "409", "413", "429", "500", "502", "503", "2xx",
+        "3xx", "4xx", "5xx",
+    ];
+    for s in [&a, &b] {
+        let text = msg_server::metrics::render(&s.state).await;
+        assert!(text.contains("msg_http_requests_total{method=\"GET\",route=\"/v1/users/{username}\""), "{text}");
+        for id in &identifiers {
+            assert!(!text.contains(id.as_str()), "identifiant « {id} » présent dans les métriques");
+        }
+        let mut series = 0;
+        for line in text.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
+            series += 1;
+            let (name, rest) = line.split_once('{').unwrap_or((line.split(' ').next().unwrap(), ""));
+            assert!(name.starts_with("msg_"), "{line}");
+            let labels = rest.rsplit_once('}').map(|(l, _)| l).unwrap_or("");
+            for pair in labels.split("\",").filter(|p| !p.is_empty()) {
+                let (k, v) = pair.split_once("=\"").unwrap();
+                let v = v.trim_end_matches('"');
+                let ok = match k {
+                    "method" => ["GET", "POST", "PUT", "DELETE", "HEAD", "other"].contains(&v),
+                    "status" => {
+                        allowed_status.contains(&v)
+                            || ["pending_activation", "pending_totp", "active", "suspended"].contains(&v)
+                    }
+                    "route" => {
+                        v == "unmatched"
+                            || v == "other"
+                            || (v.starts_with("/v1/") || v == "/web-config.json")
+                                && v.split('/').all(|seg| {
+                                    seg.is_empty()
+                                        || (seg.starts_with('{') && seg.ends_with('}'))
+                                        || seg.chars().all(|c| {
+                                            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.'
+                                        })
+                                })
+                    }
+                    "site" => ["site-a", "site-b"].contains(&v),
+                    "le" => v == "+Inf" || v.parse::<f64>().is_ok(),
+                    "version" => v == env!("CARGO_PKG_VERSION"),
+                    _ => false,
+                };
+                assert!(ok, "étiquette non bornée : {k}={v} ({line})");
+            }
+        }
+        assert!(series < 2000, "cardinalité excessive : {series} séries");
+    }
+    let text_a = msg_server::metrics::render(&a.state).await;
+    assert!(text_a.lines().any(|l| l.starts_with("msg_federation_sent_total ") && !l.ends_with(" 0")), "{text_a}");
+    assert!(text_a.contains("msg_federation_outbox{site=\"site-b\"} 0"));
+    let text_b = msg_server::metrics::render(&b.state).await;
+    assert!(text_b.lines().any(|l| l.starts_with("msg_federation_received_total ") && !l.ends_with(" 0")));
+}

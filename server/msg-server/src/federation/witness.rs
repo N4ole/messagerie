@@ -54,6 +54,7 @@ pub async fn check_peer(st: &AppState, peer: &FederationPeer) -> AppResult<Witne
         }
     };
     if !consistent {
+        st.inner.metrics.kt_witness_inconsistent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         tracing::error!(site = %peer.name, "ALERTE : journal Key Transparency incohérent chez un site pair");
         return Ok(Witnessed::Inconsistent);
     }

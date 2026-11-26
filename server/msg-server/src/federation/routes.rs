@@ -159,6 +159,7 @@ pub async fn deliver(
         .await?;
     }
     tx.commit().await?;
+    st.inner.metrics.federation_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     crate::notify::deliveries(&st, &devices).await;
     Ok(Json(FederationAck { message_id: req.message_id, accepted: devices.len() }))
 }

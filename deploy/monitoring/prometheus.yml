@@ -1,0 +1,18 @@
+# Prometheus — collecte des métriques de messagerie (aucune donnée personnelle).
+# Le port de métriques (MSG_METRICS_BIND) n'est joignable que depuis le réseau
+# d'administration ; le jeton (MSG_METRICS_TOKEN) est lu depuis un fichier.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: messagerie
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/metrics_token
+    static_configs:
+      - targets: ["msg-server-1:9100", "msg-server-2:9100"]

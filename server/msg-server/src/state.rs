@@ -29,6 +29,8 @@ pub struct Inner {
     pub federation_http: reqwest::Client,
     /// Répertoire Key Transparency, chargé à la première utilisation.
     pub kt: tokio::sync::Mutex<Option<msg_kt::KtDirectory>>,
+    /// Métriques agrégées de cette instance (sans données personnelles).
+    pub metrics: crate::metrics::Metrics,
     send_rate: Mutex<HashMap<Uuid, (i64, u32)>>,
 }
 
@@ -62,6 +64,7 @@ impl AppState {
                 webauthn,
                 federation_http,
                 kt: tokio::sync::Mutex::new(None),
+                metrics: Default::default(),
                 send_rate: Mutex::new(HashMap::new()),
             }),
         };

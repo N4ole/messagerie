@@ -20,6 +20,10 @@ enum Cmd {
     Serve {
         #[arg(long, env = "MSG_BIND", default_value = "127.0.0.1:8080")]
         bind: String,
+        /// Adresse des métriques Prometheus (désactivées si absente). À
+        /// réserver au réseau d'administration.
+        #[arg(long, env = "MSG_METRICS_BIND")]
+        metrics_bind: Option<String>,
     },
     /// Applique les migrations puis quitte.
     Migrate,
@@ -47,10 +51,20 @@ async fn main() -> anyhow::Result<()> {
             println!("Administrateur créé.");
             println!("Code d'activation (à usage unique, expire le {}): {}", r.expires_at, r.activation_code);
         }
-        Cmd::Serve { bind } => {
+        Cmd::Serve { bind, metrics_bind } => {
             let cfg = Config::from_env()?;
             let st = AppState::try_new(pool, cfg)?;
             tasks::spawn(st.clone());
+            if let Some(addr) = metrics_bind {
+                let l = tokio::net::TcpListener::bind(&addr).await?;
+                tracing::info!(%addr, "métriques Prometheus exposées");
+                let app = msg_server::metrics::router(st.clone());
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(l, app).await {
+                        tracing::error!(error = %e, "serveur de métriques arrêté");
+                    }
+                });
+            }
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!(%bind, "serveur démarré");
             axum::serve(listener, router(st)).with_graceful_shutdown(shutdown()).await?;

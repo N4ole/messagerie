@@ -81,6 +81,7 @@ async fn notify(socket: &mut WebSocket) -> bool {
 }
 
 async fn run(mut socket: WebSocket, st: AppState, ctx: AuthContext) {
+    let _guard = crate::metrics::WsGuard::new(&st);
     let mut rx = st.inner.hub.subscribe();
     if matches!(crate::routes::messages::has_pending(&st, ctx.device_id).await, Ok(true)) && !notify(&mut socket).await
     {

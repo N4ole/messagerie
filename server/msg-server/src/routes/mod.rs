@@ -94,6 +94,7 @@ pub fn router(st: AppState) -> Router {
     router
         .layer(axum::middleware::from_fn(web::security_headers))
         .layer(axum::middleware::from_fn(crate::logging::access_log))
+        .layer(from_fn_with_state(st.clone(), crate::metrics::track))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(st)
 }

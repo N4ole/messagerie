@@ -8,6 +8,7 @@ pub mod error;
 pub mod federation;
 pub mod kt;
 pub mod logging;
+pub mod metrics;
 pub mod notify;
 pub mod passwords;
 pub mod routes;

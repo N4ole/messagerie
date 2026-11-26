@@ -74,8 +74,10 @@ pub async fn deliver_due(st: &AppState) -> AppResult<usize> {
             Ok(ack) if ack.message_id == message_id => {
                 sqlx::query("DELETE FROM federation_outbox WHERE id = $1").bind(id).execute(st.db()).await?;
                 delivered += 1;
+                st.inner.metrics.federation_sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             _ => {
+                st.inner.metrics.federation_send_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let wait = (1i64 << attempts.clamp(0, 12)).min(MAX_BACKOFF_SECS);
                 sqlx::query("UPDATE federation_outbox SET attempts = attempts + 1, next_attempt_at = $2 WHERE id = $1")
                     .bind(id)

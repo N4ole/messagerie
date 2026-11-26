@@ -1,0 +1,41 @@
+# Règles d'alerte (Prometheus). Aucune ne porte sur un utilisateur.
+groups:
+  - name: messagerie
+    rules:
+      - alert: InstanceIndisponible
+        expr: up{job="messagerie"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Instance {{ $labels.instance }} injoignable"
+      - alert: TauxErreursServeur
+        expr: |
+          sum(rate(msg_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(msg_http_requests_total[5m])), 1) > 0.05
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Plus de 5 % de réponses 5xx"
+      - alert: FileFederationBloquee
+        expr: msg_federation_outbox_oldest_seconds > 3600
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Messages vers un site pair en attente depuis plus d'une heure"
+      - alert: IncoherenceKeyTransparency
+        expr: increase(msg_kt_witness_inconsistent_total[1h]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "Journal Key Transparency incohérent chez un site pair (réécriture ou vues divergentes)"
+      - alert: TemoinKtObsolete
+        expr: msg_kt_witness_age_seconds > 3600
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Journal KT de {{ $labels.site }} non vérifié depuis plus d'une heure"
+      - alert: PublicationKtEnRetard
+        expr: msg_kt_pending_updates > 0
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Mises à jour Key Transparency non publiées"
