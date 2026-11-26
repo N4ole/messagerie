@@ -65,7 +65,7 @@ sequenceDiagram
 
   A->>SA: POST /messages (destinataires @site-b)
   SA->>Q: mise en file (blob chiffré)
-  SA-xSB: POST /federation/deliver (mTLS) — échec liaison
+  SA-xSB: POST /v1/federation/deliver (signée) — échec liaison
   loop backoff exponentiel (max 1 h), rétention 7 j
     Q->>SB: ré-émission
   end

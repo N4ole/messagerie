@@ -49,3 +49,13 @@ même poste) et deux comptes créés par `msg-admin`.
 | 28 | Liaison d'un navigateur (client web) : code/QR, empreinte identique sur les deux appareils, approbation, conversations existantes visibles | ☐ | ☐ |
 | 29 | Révocation du navigateur depuis le desktop : le navigateur est déconnecté et ses données effacées | ☐ | ☐ |
 | 30 | Desktop lié comme second appareil d'un compte créé sur un autre poste | ☐ | ☐ |
+
+## Phase 4
+
+| # | Vérification | Résultat | Remarques |
+|---|---|---|---|
+| 31 | Desktop connecté à un site fédéré : conversation avec `utilisateur@autre-site`, correspondant affiché avec son site, numéro de sécurité identique des deux côtés | ☐ | ☐ |
+| 32 | Pièce jointe envoyée à un utilisateur d'un autre site, téléchargée et ouverte | ☐ | ☐ |
+| 33 | Site distant arrêté : message envoyé, puis reçu après redémarrage du site | ☐ | ☐ |
+| 34 | Transfert d'administration d'un groupe (★) : le nouvel administrateur ajoute un membre ; l'ancien quitte le groupe | ☐ | ☐ |
+| 35 | Desktop derrière le déploiement Compose de production (2 instances) : arrêt d'une instance pendant une conversation sans perte de messages | ☐ | ☐ |

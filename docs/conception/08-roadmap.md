@@ -23,7 +23,7 @@ Groupes MLS (ajout/retrait/rôles), pièces jointes (`msg-media`), QR / safety n
 
 ## Phase 4 — Multi-site & infra
 
-Fédération mTLS + liste blanche, file store-and-forward, réplication, HA (Patroni/CloudNativePG), load balancing, Compose prod, manifests K8s + Helm, script VM, sauvegardes `pgBackRest` + procédure DR testée, Prometheus/Grafana + test « métriques sans PII ».
+Fédération sur liste blanche (requêtes signées, ADR-0009 révisé), file store-and-forward, réplication, HA (Patroni/CloudNativePG), load balancing, Compose prod, manifests K8s + Helm, script VM, sauvegardes chiffrées (age, ADR-0016) + procédure DR testée en CI, Prometheus/Grafana + test « métriques sans PII ».
 
 ## Phase 5 — Durcissement
 

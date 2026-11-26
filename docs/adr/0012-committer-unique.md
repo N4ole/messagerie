@@ -32,5 +32,13 @@ produiraient une **fourche** irrécupérable.
   groupe supplémentaire côté serveur.
 − L'administrateur est un point de passage : s'il est hors ligne, les
   propositions attendent ; s'il disparaît, le groupe ne peut plus évoluer.
-− Transfert d'administration et ordonnancement côté serveur (époque attendue
-  par groupe, sans révéler la composition) : Phase 4.
+− Ordonnancement côté serveur (époque attendue par groupe, sans révéler la
+  composition) : non retenu à ce stade (limite documentée).
+
+**Complément Phase 4 — transfert d'administration.** L'administrateur peut
+désigner un autre membre par une annonce `GroupInfo` chiffrée dans le groupe.
+Chaque appareil ne l'accepte que de l'administrateur **en place** et vers un
+**membre** du groupe ; dès réception, le nouvel administrateur est le seul
+émetteur de commits et l'ancien peut quitter le groupe. Un administrateur
+disparu sans transfert bloque toujours l'évolution du groupe (recréer le
+groupe).

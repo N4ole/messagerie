@@ -42,7 +42,7 @@ flowchart LR
 
   ARTI -- "Tor → .onion (TLS épinglé)" --> LB_A
   UI2 -- "HTTPS / WSS (ou Tor Browser → .onion)" --> LB_A
-  S_A1 <-- "Fédération mTLS sur liste blanche<br/>(store-and-forward)" --> S_B
+  S_A1 <-- "Fédération sur liste blanche, requêtes signées<br/>(store-and-forward)" --> S_B
 ```
 
 Principes :
