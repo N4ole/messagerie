@@ -14,7 +14,7 @@ members = [
     "server/msg-admin",
     "apps/desktop/src-tauri",
 ]
-exclude = ["spikes"]
+exclude = ["spikes", "fuzz"]
 
 [workspace.package]
 version = "0.1.0"
