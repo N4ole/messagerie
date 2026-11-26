@@ -1,0 +1,65 @@
+{{- with .Values.database.cloudnativepg }}{{- if .enabled }}
+# PostgreSQL haute disponibilité (opérateur CloudNativePG requis) : un
+# primaire et des réplicas en streaming, bascule automatique, réplication
+# synchrone facultative, archivage continu pour la restauration à un instant.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "messagerie.fullname" $ }}-db
+  labels: {{- include "messagerie.labels" $ | nindent 4 }}
+spec:
+  instances: {{ .instances }}
+  primaryUpdateStrategy: unsupervised
+  {{- if .synchronous }}
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+  {{- end }}
+  bootstrap:
+    initdb:
+      database: messagerie
+      owner: messagerie
+      dataChecksums: true
+  storage:
+    size: {{ .storage.size }}
+    {{- with .storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+  monitoring:
+    enablePodMonitor: false
+  {{- if .backup.enabled }}
+  backup:
+    retentionPolicy: {{ .backup.retentionPolicy | quote }}
+    barmanObjectStore:
+      destinationPath: {{ .backup.destinationPath | quote }}
+      {{- with .backup.endpointURL }}
+      endpointURL: {{ . | quote }}
+      {{- end }}
+      s3Credentials:
+        accessKeyId: { name: {{ .backup.s3CredentialsSecret }}, key: ACCESS_KEY_ID }
+        secretAccessKey: { name: {{ .backup.s3CredentialsSecret }}, key: ACCESS_SECRET_KEY }
+      wal:
+        compression: gzip
+        encryption: AES256
+      data:
+        compression: gzip
+        encryption: AES256
+  {{- end }}
+{{- if .backup.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ include "messagerie.fullname" $ }}-db
+  labels: {{- include "messagerie.labels" $ | nindent 4 }}
+spec:
+  schedule: {{ .backup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ include "messagerie.fullname" $ }}-db
+{{- end }}
+{{- end }}{{- end }}

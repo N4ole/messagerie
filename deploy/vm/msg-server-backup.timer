@@ -1,0 +1,10 @@
+[Unit]
+Description=Messagerie — sauvegarde toutes les 6 heures
+
+[Timer]
+OnCalendar=*-*-* 00/6:17:00
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

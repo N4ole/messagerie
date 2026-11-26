@@ -1,0 +1,7 @@
+apiVersion: v2
+name: messagerie
+description: Serveur de messagerie chiffrée de bout en bout (instances sans état, PostgreSQL HA via CloudNativePG).
+type: application
+version: 0.4.0
+appVersion: "0.4.0"
+kubeVersion: ">=1.27.0-0"

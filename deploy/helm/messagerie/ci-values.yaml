@@ -1,0 +1,20 @@
+# Valeurs de CI : active toutes les options pour valider chaque manifeste.
+federation:
+  peers:
+    - name: lyon.example.org
+      url: https://lyon.example.org
+      public_key: "0000000000000000000000000000000000000000000000000000000000000000"
+  egressCIDRs: ["203.0.113.0/24"]
+database:
+  cloudnativepg:
+    backup:
+      enabled: true
+logicalBackup:
+  enabled: true
+  image: ghcr.io/n4ole/messagerie-backup:ci
+  recipients: ["age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq"]
+metrics:
+  serviceMonitor:
+    enabled: true
+autoscaling:
+  enabled: true

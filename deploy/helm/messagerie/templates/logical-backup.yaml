@@ -1,0 +1,71 @@
+{{- if .Values.logicalBackup.enabled }}
+# Sauvegarde logique chiffrée côté client (age) : complément indépendant de
+# l'archivage CloudNativePG, lisible uniquement avec la clé privée hors ligne.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "messagerie.fullname" . }}-backup-recipients
+  labels: {{- include "messagerie.labels" . | nindent 4 }}
+data:
+  recipients.txt: |
+    {{- range (required "logicalBackup.recipients requis" .Values.logicalBackup.recipients) }}
+    {{ . }}
+    {{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "messagerie.fullname" . }}-backups
+  labels: {{- include "messagerie.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: { storage: {{ .Values.logicalBackup.pvcSize }} }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "messagerie.fullname" . }}-backup
+  labels: {{- include "messagerie.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.logicalBackup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            fsGroup: 70
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: backup
+              image: {{ required "logicalBackup.image requis" .Values.logicalBackup.image }}
+              args: ["/usr/local/bin/backup.sh"]
+              env:
+                - { name: PGHOST, value: {{ include "messagerie.fullname" . }}-db-rw }
+                - { name: PGDATABASE, value: messagerie }
+                - name: PGUSER
+                  valueFrom: { secretKeyRef: { name: {{ include "messagerie.dbSecret" . }}, key: username } }
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ include "messagerie.dbSecret" . }}, key: password } }
+                - { name: BACKUP_RECIPIENTS, value: /etc/backup/recipients.txt }
+                - { name: BACKUP_DIR, value: /backups }
+                - { name: BACKUP_KEEP, value: {{ .Values.logicalBackup.keep | quote }} }
+              {{- include "messagerie.containerSecurity" . | nindent 14 }}
+              volumeMounts:
+                - { name: recipients, mountPath: /etc/backup, readOnly: true }
+                - { name: backups, mountPath: /backups }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - name: recipients
+              configMap: { name: {{ include "messagerie.fullname" . }}-backup-recipients }
+            - name: backups
+              persistentVolumeClaim: { claimName: {{ include "messagerie.fullname" . }}-backups }
+            - name: tmp
+              emptyDir: {}
+{{- end }}

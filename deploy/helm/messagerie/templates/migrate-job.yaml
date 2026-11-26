@@ -1,0 +1,27 @@
+# Migrations appliquées avant chaque installation / mise à jour.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "messagerie.fullname" . }}-migrate-{{ .Release.Revision }}
+  labels: {{- include "messagerie.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      {{- include "messagerie.podSecurity" . | nindent 6 }}
+      containers:
+        - name: migrate
+          image: {{ include "messagerie.image" . }}
+          args: ["migrate"]
+          env:
+            {{- include "messagerie.env" . | nindent 12 }}
+          {{- include "messagerie.containerSecurity" . | nindent 10 }}
+          volumeMounts:
+            {{- include "messagerie.volumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "messagerie.volumes" . | nindent 8 }}
