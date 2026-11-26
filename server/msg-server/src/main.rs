@@ -28,6 +28,8 @@ enum Cmd {
     },
     /// Applique les migrations puis quitte.
     Migrate,
+    /// Écrit le manifeste d'intégrité du client web (à la construction de l'image).
+    WebManifest { dir: std::path::PathBuf },
     /// Crée le premier administrateur (impossible s'il en existe déjà un).
     BootstrapAdmin {
         #[arg(long)]
@@ -39,6 +41,11 @@ enum Cmd {
 async fn main() -> anyhow::Result<()> {
     logging::init();
     let cli = Cli::parse();
+    if let Cmd::WebManifest { dir } = &cli.cmd {
+        let digest = msg_server::web_integrity::write(dir)?;
+        println!("manifeste écrit : {}/integrity.json (SHA-256 {digest})", dir.display());
+        return Ok(());
+    }
     let url = match cli.database_url {
         Some(u) => zeroize::Zeroizing::new(u),
         None => msg_server::config::secret_env("DATABASE_URL")?
@@ -58,8 +65,15 @@ async fn main() -> anyhow::Result<()> {
             println!("Administrateur créé.");
             println!("Code d'activation (à usage unique, expire le {}): {}", r.expires_at, r.activation_code);
         }
+        Cmd::WebManifest { .. } => unreachable!("traité avant la connexion à la base"),
         Cmd::Serve { bind, metrics_bind } => {
             let cfg = Config::from_env()?;
+            if let Some(dir) = &cfg.web_dir {
+                match msg_server::web_integrity::verify(dir)? {
+                    Some(digest) => tracing::info!(manifeste = %digest, "client web vérifié (intégrité)"),
+                    None => tracing::warn!("client web sans manifeste d'intégrité (développement uniquement)"),
+                }
+            }
             let st = AppState::try_new(pool, cfg)?;
             tasks::spawn(st.clone());
             if let Some(addr) = metrics_bind {

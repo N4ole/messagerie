@@ -143,6 +143,10 @@ export interface SecurityStatus {
   captureProtection: string;
   autoLockMinutes: number;
   passkeysSupported: boolean;
+  /** Empreinte SHA-256 de l'exécutable (desktop) ; vide dans un navigateur. */
+  executableSha256: string;
+  /** État de la signature Authenticode, en clair. */
+  signature: string;
 }
 
 /** Erreur structurée renvoyée par le cœur. */

@@ -8,6 +8,7 @@
 use zeroize::Zeroizing;
 
 pub mod capture;
+pub mod integrity;
 pub mod tpm;
 pub mod webauthn;
 

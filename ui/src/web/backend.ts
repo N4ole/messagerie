@@ -216,6 +216,8 @@ export function createWebBackend(app: WebAppApi, kv: SyncKv, opts: WebOptions = 
       captureProtection: "indisponible dans un navigateur",
       autoLockMinutes,
       passkeysSupported: false,
+      executableSha256: "",
+      signature: "client web servi par le serveur (voir le guide : limites)",
     }),
 
     conversations: () => app.conversations() as Promise<Conversation[]>,

@@ -113,6 +113,16 @@ export function SettingsDialog({
         <dd>{status?.captureProtection ?? session.captureProtection}</dd>
         <dt>Empreinte de votre identité</dt>
         <dd className="fingerprint">{session.fingerprint}</dd>
+        <dt>Application</dt>
+        <dd>{status?.signature ?? "…"}</dd>
+        {status?.executableSha256 ? (
+          <>
+            <dt>Empreinte SHA-256 de l'exécutable</dt>
+            <dd className="fingerprint" data-testid="exe-sha256">
+              {status.executableSha256}
+            </dd>
+          </>
+        ) : null}
       </dl>
       <label>
         Verrouillage automatique après
