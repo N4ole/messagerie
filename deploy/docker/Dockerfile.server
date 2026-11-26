@@ -14,7 +14,9 @@ RUN RUSTFLAGS='--cfg getrandom_backend="wasm_js"' \
 
 FROM node:25-bookworm-slim AS web
 WORKDIR /src
-RUN corepack enable
+# Node 25 n'embarque plus corepack : pnpm installé à la version exacte du
+# champ « packageManager » de package.json.
+RUN npm install --global pnpm@10.12.1
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY ui ./ui
 COPY apps/desktop/package.json ./apps/desktop/package.json
