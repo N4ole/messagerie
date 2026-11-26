@@ -98,6 +98,21 @@ impl std::fmt::Debug for Config {
     }
 }
 
+/// Lit un secret depuis `NOM` ou, à défaut, depuis le fichier `NOM_FILE`
+/// (Docker secrets, Kubernetes, systemd `LoadCredential`).
+pub fn secret_env(name: &str) -> anyhow::Result<Option<Zeroizing<String>>> {
+    if let Ok(v) = std::env::var(name) {
+        return Ok(Some(Zeroizing::new(v)));
+    }
+    match std::env::var_os(format!("{name}_FILE")) {
+        Some(path) => {
+            let v = std::fs::read_to_string(&path).with_context(|| format!("{name}_FILE illisible"))?;
+            Ok(Some(Zeroizing::new(v.trim_end_matches(['\n', '\r']).to_owned())))
+        }
+        None => Ok(None),
+    }
+}
+
 fn env_i64(name: &str, default: i64) -> anyhow::Result<i64> {
     match std::env::var(name) {
         Ok(v) => v.parse().with_context(|| format!("{name} invalide")),
@@ -133,10 +148,9 @@ impl Config {
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
-        let secret_hex = Zeroizing::new(
-            std::env::var("MSG_SERVER_SECRET")
-                .context("MSG_SERVER_SECRET manquant (64 caractères hexadécimaux, ex. `openssl rand -hex 32`)")?,
-        );
+        let secret_hex = secret_env("MSG_SERVER_SECRET")?.context(
+            "MSG_SERVER_SECRET (ou MSG_SERVER_SECRET_FILE) manquant (64 caractères hexadécimaux, ex. `openssl rand -hex 32`)",
+        )?;
         let bytes = Zeroizing::new(hex::decode(secret_hex.trim()).context("MSG_SERVER_SECRET : hexadécimal attendu")?);
         if bytes.len() != 32 {
             bail!("MSG_SERVER_SECRET doit faire 32 octets (64 caractères hexadécimaux)");
@@ -168,12 +182,32 @@ impl Config {
             c.federation_peers = load_peers(&json, &c.site_name)?;
         }
         c.federation_proxy = std::env::var("MSG_FEDERATION_PROXY").ok().filter(|s| !s.is_empty());
-        c.metrics_token = std::env::var("MSG_METRICS_TOKEN").ok().filter(|s| !s.is_empty());
+        c.metrics_token = secret_env("MSG_METRICS_TOKEN")?.map(|t| t.to_string()).filter(|s| !s.is_empty());
         c.web_dir = std::env::var_os("MSG_WEB_DIR").map(Into::into);
         c.web_onion_only = matches!(std::env::var("MSG_WEB_ONION_ONLY").as_deref(), Ok("1" | "true"));
         if c.access_ttl_secs <= 0 || c.session_ttl_secs < c.access_ttl_secs {
             bail!("durées de session incohérentes");
         }
         Ok(c)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::secret_env;
+
+    #[test]
+    fn secrets_are_read_from_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret");
+        std::fs::write(&path, "valeur-du-fichier\n").unwrap();
+        // Noms propres à ce test : aucune autre lecture concurrente.
+        std::env::set_var("MSG_TEST_SECRET_FILE", &path);
+        assert_eq!(secret_env("MSG_TEST_SECRET").unwrap().unwrap().as_str(), "valeur-du-fichier");
+        std::env::set_var("MSG_TEST_SECRET", "valeur-directe");
+        assert_eq!(secret_env("MSG_TEST_SECRET").unwrap().unwrap().as_str(), "valeur-directe");
+        assert!(secret_env("MSG_TEST_ABSENT").unwrap().is_none());
+        std::env::set_var("MSG_TEST_MISSING_FILE", dir.path().join("absent"));
+        assert!(secret_env("MSG_TEST_MISSING").is_err());
     }
 }

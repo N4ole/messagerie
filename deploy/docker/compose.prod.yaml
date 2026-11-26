@@ -1,0 +1,161 @@
+# Déploiement de PRODUCTION sur un hôte Docker : deux instances sans état du
+# serveur derrière HAProxy (TLS), PostgreSQL, sauvegardes chiffrées, et
+# (profil « monitoring ») Prometheus + Grafana sur la boucle locale.
+#
+# Haute disponibilité : ce fichier tolère la perte d'une instance du
+# serveur, PAS celle de l'hôte ni de PostgreSQL (instance unique). Pour une
+# base répliquée avec bascule automatique, utiliser le chart Helm
+# (CloudNativePG) ou Patroni (docs/deploiement/production.md).
+#
+# Préparation (une fois) — voir deploy/docker/secrets/README.md :
+#   ./deploy/docker/init-secrets.sh
+#   cp fullchain+key → deploy/docker/secrets/tls.pem
+#   clé publique age → deploy/docker/secrets/backup-recipients.txt
+# Démarrage :
+#   docker compose -f deploy/docker/compose.prod.yaml up -d
+#   docker compose -f deploy/docker/compose.prod.yaml run --rm server-1 bootstrap-admin --username admin
+name: messagerie
+x-server: &server
+  image: ${MSG_IMAGE:-ghcr.io/n4ole/messagerie-server:latest}
+  restart: unless-stopped
+  depends_on:
+    migrate: { condition: service_completed_successfully }
+  environment: &server-env
+    DATABASE_URL_FILE: /run/secrets/database_url
+    MSG_SERVER_SECRET_FILE: /run/secrets/server_secret
+    MSG_METRICS_TOKEN_FILE: /run/secrets/metrics_token
+    MSG_METRICS_BIND: 0.0.0.0:9100
+    MSG_SITE_NAME: ${MSG_SITE_NAME:?définir MSG_SITE_NAME (ex. paris.example.org)}
+    MSG_WEBAUTHN_RP_ID: ${MSG_DOMAIN:?définir MSG_DOMAIN}
+    MSG_WEBAUTHN_ORIGIN: https://${MSG_DOMAIN}
+    MSG_DB_MAX_CONNECTIONS: "15"
+  secrets: [database_url, server_secret, metrics_token]
+  networks: [backend, egress, monitoring]
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  deploy:
+    resources:
+      limits: { memory: 1g }
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: messagerie
+      POSTGRES_DB: messagerie
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_INITDB_ARGS: --data-checksums
+    secrets: [db_password]
+    volumes: [db:/var/lib/postgresql/data]
+    networks: [backend]
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "messagerie"]
+      interval: 5s
+      retries: 20
+
+  migrate:
+    <<: *server
+    restart: "no"
+    depends_on:
+      db: { condition: service_healthy }
+    command: ["migrate"]
+    networks: [backend]
+
+  server-1: *server
+  server-2: *server
+
+  haproxy:
+    image: haproxy:3.2-alpine
+    restart: unless-stopped
+    depends_on: [server-1, server-2]
+    ports: ["${MSG_HTTPS_PORT:-443}:8443", "${MSG_HTTP_PORT:-80}:8080"]
+    volumes: ["./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"]
+    secrets:
+      - source: tls
+        target: tls.pem
+    networks: [frontend, backend]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  backup:
+    image: ${MSG_BACKUP_IMAGE:-messagerie-backup:local}
+    build: ../backup
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      PGHOST: db
+      PGUSER: messagerie
+      PGDATABASE: messagerie
+      PGPASSWORD_FILE: /run/secrets/db_password
+      BACKUP_RECIPIENTS: /run/secrets/backup_recipients
+      BACKUP_DIR: /backups
+      BACKUP_KEEP: "28"
+    secrets: [db_password, backup_recipients]
+    # Copier ce volume hors site (rclone, restic…) : son contenu est chiffré.
+    volumes: [backups:/backups]
+    networks: [backend]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  prometheus:
+    profiles: [monitoring]
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus:/prometheus
+    secrets: [metrics_token]
+    networks: [monitoring, admin]
+    ports: ["127.0.0.1:9090:9090"]
+
+  grafana:
+    profiles: [monitoring]
+    image: grafana/grafana:12.1.1
+    restart: unless-stopped
+    environment:
+      # Zéro télémétrie : ni rapport d'usage, ni vérification de mises à jour.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+    secrets: [grafana_password]
+    volumes:
+      - ../monitoring/grafana/provisioning.yml:/etc/grafana/provisioning/dashboards/messagerie.yml:ro
+      - ../monitoring/grafana/datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - ../monitoring/grafana/messagerie.json:/var/lib/grafana/dashboards/messagerie.json:ro
+      - grafana:/var/lib/grafana
+    networks: [monitoring, admin]
+    ports: ["127.0.0.1:3000:3000"]
+
+networks:
+  frontend: {}
+  # Base et instances : aucun accès extérieur.
+  backend: { internal: true }
+  # Sorties des instances (fédération vers les sites pairs uniquement).
+  egress: {}
+  monitoring: { internal: true }
+  # Accès local (127.0.0.1) des administrateurs à Prometheus et Grafana.
+  admin: {}
+
+volumes:
+  db:
+  backups:
+  prometheus:
+  grafana:
+
+secrets:
+  db_password: { file: ./secrets/db_password }
+  database_url: { file: ./secrets/database_url }
+  server_secret: { file: ./secrets/server_secret }
+  metrics_token: { file: ./secrets/metrics_token }
+  grafana_password: { file: ./secrets/grafana_password }
+  backup_recipients: { file: ./secrets/backup-recipients.txt }
+  tls: { file: ./secrets/tls.pem }

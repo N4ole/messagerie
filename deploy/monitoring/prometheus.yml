@@ -15,4 +15,4 @@ scrape_configs:
       type: Bearer
       credentials_file: /run/secrets/metrics_token
     static_configs:
-      - targets: ["msg-server-1:9100", "msg-server-2:9100"]
+      - targets: ["server-1:9100", "server-2:9100"]

@@ -8,8 +8,9 @@ use sqlx::postgres::PgPoolOptions;
 #[command(name = "msg-server", version, about = "Serveur de messagerie chiffrée de bout en bout")]
 struct Cli {
     /// URL PostgreSQL (ex. postgres://msg:***@localhost/messagerie).
+    /// (ou fichier `DATABASE_URL_FILE`).
     #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
-    database_url: String,
+    database_url: Option<String>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -38,7 +39,13 @@ enum Cmd {
 async fn main() -> anyhow::Result<()> {
     logging::init();
     let cli = Cli::parse();
-    let pool = PgPoolOptions::new().max_connections(20).connect(&cli.database_url).await?;
+    let url = match cli.database_url {
+        Some(u) => zeroize::Zeroizing::new(u),
+        None => msg_server::config::secret_env("DATABASE_URL")?
+            .ok_or_else(|| anyhow::anyhow!("DATABASE_URL (ou DATABASE_URL_FILE) manquant"))?,
+    };
+    let max = std::env::var("MSG_DB_MAX_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let pool = PgPoolOptions::new().max_connections(max).connect(&url).await?;
     migrate(&pool).await?;
     match cli.cmd {
         Cmd::Migrate => {
