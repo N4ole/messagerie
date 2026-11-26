@@ -175,10 +175,12 @@ mod seal_tests {
 
     #[test]
     fn stored_parameters_are_bounded() {
-        let mut w = wrap(&random_bytes::<32>().unwrap(), "mot de passe", Argon2Params::INSECURE_FOR_TESTS).unwrap();
+        // Mot de passe aléatoire (aucune valeur secrète figée dans le code).
+        let password = hex::encode(random_bytes::<16>().unwrap());
+        let mut w = wrap(&random_bytes::<32>().unwrap(), &password, Argon2Params::INSECURE_FOR_TESTS).unwrap();
         w.params.m_kib = 64 * 1024 * 1024;
-        assert!(matches!(unwrap(&w, "mot de passe"), Err(CryptoError::Format(_))));
+        assert!(matches!(unwrap(&w, &password), Err(CryptoError::Format(_))));
         w.params = Argon2Params { t: 1000, ..Argon2Params::INSECURE_FOR_TESTS };
-        assert!(matches!(unwrap(&w, "mot de passe"), Err(CryptoError::Format(_))));
+        assert!(matches!(unwrap(&w, &password), Err(CryptoError::Format(_))));
     }
 }

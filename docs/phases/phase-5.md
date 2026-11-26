@@ -85,6 +85,10 @@ Fuzzing (`fuzz/`, libFuzzer) — passe locale de 5 minutes par cible, **aucun pl
 | `key_transparency` | preuves KT forgées (recherche, ajout seul) | 12,2 M |
 | `signatures` | en-têtes de signature d'appareils et de sites | 8,1 M |
 
+CodeQL a signalé trois « valeurs cryptographiques codées en dur » : le mot de passe littéral
+du nouveau test des bornes Argon2 (test uniquement, sans effet en production) ; remplacé par
+un mot de passe aléatoire, comme dans les autres tests.
+
 **Trouvé par le fuzzing en CI (`media`)** : un GIF de 150 octets annonçant 11 308 × 11 308 px
 passait les limites existantes (côté ≤ 12 000 px, 512 Mio) et coûtait ≈ 512 Mio et 0,8 s de
 décodage (bombe de décompression ; côté expéditeur uniquement, car seul l'expéditeur nettoie
