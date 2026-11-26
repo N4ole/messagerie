@@ -17,11 +17,32 @@ ils demandent les droits d'administration.
 
 ## Signature de code (Phase 5)
 
-Depuis juin 2023, les clés de signature de code doivent être stockées dans un
-HSM : aucun fichier `.pfx` ne doit être ajouté au dépôt. Options : Azure
-Artifact Signing (ex-Trusted Signing), SignPath (offre open source), ou le HSM
-cloud d'une autorité de certification. Les secrets correspondants seront
-placés dans l'environment `release-signing`.
+Décision de la Phase 5 : **releases non signées pour l'instant**, mais
+attestées (provenance Sigstore) et accompagnées de `SHA256SUMS`.
+L'application affiche l'état de sa signature et l'empreinte de son exécutable
+(⚙ Sécurité) ; une signature présente mais altérée bloque l'application.
+
+Le workflow `release.yml` signe automatiquement dès que des secrets sont
+présents dans l'environment `release-signing` :
+
+| Secret | Contenu |
+|---|---|
+| `WINDOWS_CERTIFICATE_PFX_BASE64` | certificat et clé au format PFX, encodés en Base64 |
+| `WINDOWS_CERTIFICATE_PASSWORD` | mot de passe du PFX |
+
+Tauri signe alors **chaque binaire** (y compris l'exécutable contenu dans les
+installeurs) via `signtool`, horodatage RFC 3161 compris, puis le workflow
+vérifie toutes les signatures (`signtool verify /pa`).
+
+**Limite** : depuis juin 2023, la clé d'un certificat de signature de code
+reconnu publiquement doit rester dans un HSM : elle n'est **pas exportable en
+PFX**. Le chemin PFX convient donc à un certificat d'entreprise (AC interne,
+déployée sur les postes par GPO). Pour une reconnaissance publique (sans
+avertissement SmartScreen), utiliser un service à HSM — Azure Artifact Signing
+(ex-Trusted Signing), SignPath (offre open source) ou le HSM cloud d'une
+autorité de certification — en remplaçant la commande `signCommand` construite
+à l'étape « Certificat de signature » par celle du fournisseur. Aucun fichier
+`.pfx` ne doit être ajouté au dépôt.
 
 ## Rulesets fournis
 
