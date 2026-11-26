@@ -59,3 +59,12 @@ même poste) et deux comptes créés par `msg-admin`.
 | 33 | Site distant arrêté : message envoyé, puis reçu après redémarrage du site | ☐ | ☐ |
 | 34 | Transfert d'administration d'un groupe (★) : le nouvel administrateur ajoute un membre ; l'ancien quitte le groupe | ☐ | ☐ |
 | 35 | Desktop derrière le déploiement Compose de production (2 instances) : arrêt d'une instance pendant une conversation sans perte de messages | ☐ | ☐ |
+
+## Phase 5
+
+| # | Vérification | Résultat | Remarques |
+|---|---|---|---|
+| 36 | ⚙ Sécurité : « non signé — comparez l'empreinte… » et empreinte SHA-256 identique à la ligne de `SHA256SUMS` de la Release (portable) | ☐ | ☐ |
+| 37 | Exécutable signé (certificat d'essai ou d'entreprise) : ⚙ Sécurité indique « signature Authenticode valide » | ☐ | ☐ |
+| 38 | Même exécutable signé, un octet modifié (éditeur hexadécimal) : boîte « Intégrité compromise », l'application se ferme | ☐ | ☐ |
+| 39 | Aucune connexion réseau au démarrage hors serveur configuré (moniteur de ressources : pas de CRL/OCSP) | ☐ | ☐ |

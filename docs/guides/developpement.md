@@ -125,8 +125,50 @@ et l'exécutable portable `target/release/messagerie.exe`.
 | `MSG_WEB_DIR` | — | Dossier du client web (`ui/dist-web`) ; servi à la racine, même origine que l'API |
 | `MSG_WEB_ONION_ONLY` | `0` | `1` : le client web refuse de fonctionner hors d'une adresse `.onion` |
 | `MSG_LOG` / `MSG_LOG_JSON` | `info` / `0` | Journalisation |
+| `MSG_SERVER_SECRET_FILE`, `DATABASE_URL_FILE`, `MSG_METRICS_TOKEN_FILE` | — | Mêmes valeurs lues depuis un fichier (Docker secrets, Kubernetes, systemd) |
+| `MSG_DB_MAX_CONNECTIONS` | `20` | Connexions PostgreSQL par instance |
+| `MSG_FEDERATION_PEERS` | — | Fichier JSON de la liste blanche des sites pairs ([production](production.md#fédération-entre-sites)) |
+| `MSG_FEDERATION_PROXY` | — | Proxy SOCKS des pairs `.onion` (ex. `socks5h://tor:9050`) |
+| `MSG_METRICS_BIND` / `MSG_METRICS_TOKEN` | — | Adresse des métriques Prometheus (désactivées si absente) et jeton porteur |
 
 > Perdre `MSG_SERVER_SECRET` rend tous les mots de passe et secrets TOTP
 > inutilisables (réinitialisation de tous les comptes nécessaire). Il dérive
 > aussi la clé VRF du journal Key Transparency : le changer rend le journal
 > existant impossible à rejouer (le serveur refuse alors de servir KT).
+
+## Vérifications de sécurité (Phase 5)
+
+Fuzzing (chaîne nightly et `cargo-fuzz` 0.13.2) — sept cibles : `markdown`,
+`media`, `app_message`, `mls_incoming`, `api_json`, `key_transparency`,
+`signatures` :
+
+```bash
+cargo install cargo-fuzz --version 0.13.2 --locked
+```
+
+```bash
+cd fuzz && cargo +nightly fuzz run mls_incoming -- -max_total_time=300
+```
+
+Builds reproductibles (deux constructions comparées octet par octet) :
+
+```bash
+sh scripts/reproducible-build.sh check
+```
+
+Scan ZAP actif de l'API (serveur local sur le port 18080, Docker requis) :
+
+```bash
+mkdir -m 777 zap && sed 's#http://127.0.0.1:8080#http://127.0.0.1:18080#' docs/api/openapi.yaml > zap/openapi.yaml
+```
+
+```bash
+docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" zaproxy/zap-stable zap-api-scan.py -t /zap/wrk/openapi.yaml -f openapi -r rapport.html
+```
+
+Manifeste d'intégrité du client web (fait automatiquement dans l'image Docker) :
+
+```bash
+cargo run -p msg-server -- web-manifest ui/dist-web
+```
+

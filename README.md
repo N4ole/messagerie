@@ -2,7 +2,7 @@
 
 Messagerie chiffrée de bout en bout, disponible en **application Windows (`.exe`)** et en **client web** interopérables, avec serveurs fédérés multi-sites.
 
-> **État : Phase 3 — Réseau et web livrée** (client web WASM interopérable avec le desktop, Key Transparency, appareils multiples et révocation, Tor embarqué en mode strict, épinglage TLS, service onion). Voir les rapports de [Phase 1](docs/phases/phase-1.md), [Phase 2](docs/phases/phase-2.md) et [Phase 3](docs/phases/phase-3.md) et leurs **limites connues**. Aucun audit externe : ne pas utiliser pour des usages à haut risque.
+> **État : Phase 5 — Durcissement livrée** (fuzzing des parseurs, vérification d'intégrité au démarrage, builds reproductibles, revue OWASP ASVS niveau 2 et des compositions cryptographiques, scan ZAP de l'API en CI). Rapports de [Phase 1](docs/phases/phase-1.md), [2](docs/phases/phase-2.md), [3](docs/phases/phase-3.md), [4](docs/phases/phase-4.md) et [5](docs/phases/phase-5.md), avec leurs **limites connues**. Revue de sécurité **interne** seulement, aucun audit externe : ne pas utiliser pour des usages à haut risque sans audit indépendant.
 
 ## Démarrage rapide
 
@@ -15,6 +15,8 @@ pnpm build:web   # client web (nécessite wasm-bindgen-cli 0.2.130)
 
 - [Guide de développement](docs/guides/developpement.md) — build, tests, serveur local, `.exe`
 - [Guide d'administration](docs/guides/administration.md) — création des comptes
+- [Production](docs/guides/production.md) — Compose, Kubernetes/Helm, VM, fédération, supervision, sauvegardes
+- [Revue ASVS niveau 2](docs/securite/asvs-l2.md) et [revue des compositions cryptographiques](docs/securite/revue-crypto.md)
 - [Configuration de GitHub](docs/guides/github-setup.md) — réglages à activer
 - [Recette Windows](docs/guides/recette-windows.md) — vérifications manuelles
 
