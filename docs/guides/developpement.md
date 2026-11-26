@@ -4,7 +4,7 @@
 
 | Outil | Version | Remarque |
 |---|---|---|
-| Rust | 1.97.0 (fixée par `rust-toolchain.toml`) | `rustup toolchain install` |
+| Rust | 1.99.0 (fixée par `rust-toolchain.toml`) | `rustup toolchain install` |
 | Node.js / pnpm | 22 / 10.12 (`corepack enable`) | |
 | PostgreSQL | 16 | Tests d'intégration et serveur |
 | Windows | Visual Studio Build Tools (C++), Perl (Strawberry) | SQLCipher et OpenSSL sont compilés depuis les sources |

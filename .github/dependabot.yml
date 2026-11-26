@@ -1,40 +1,32 @@
-# Une seule PR groupée par écosystème et par mois (mineures ET majeures),
-# 5 PR ouvertes au maximum. Les alertes de sécurité Dependabot restent
-# indépendantes de ce calendrier (paramètres du dépôt).
+# Une SEULE PR par mois pour toutes les dépendances (Rust, npm, GitHub
+# Actions, images Docker), grâce au groupe multi-écosystèmes « dependances ».
+# Les mises à jour de sécurité Dependabot restent séparées et immédiates
+# (comportement de GitHub, réglé dans les paramètres du dépôt).
 version: 2
+
+multi-ecosystem-groups:
+  dependances:
+    schedule:
+      interval: monthly
+
 updates:
   - package-ecosystem: cargo
     directory: /
-    schedule: { interval: monthly }
-    open-pull-requests-limit: 5
-    groups:
-      rust:
-        patterns: ["*"]
+    patterns: ["*"]
+    multi-ecosystem-group: dependances
   - package-ecosystem: npm
     directory: /
-    schedule: { interval: monthly }
-    open-pull-requests-limit: 5
-    groups:
-      npm:
-        patterns: ["*"]
+    patterns: ["*"]
+    multi-ecosystem-group: dependances
+    ignore:
+      # typescript-eslint n'accepte pas encore TypeScript 7 (pair < 6.1).
+      - dependency-name: typescript
+        versions: [">=7"]
   - package-ecosystem: github-actions
     directory: /
-    schedule: { interval: monthly }
-    open-pull-requests-limit: 5
-    groups:
-      actions:
-        patterns: ["*"]
+    patterns: ["*"]
+    multi-ecosystem-group: dependances
   - package-ecosystem: docker
-    directory: /deploy/docker
-    schedule: { interval: monthly }
-    open-pull-requests-limit: 5
-    groups:
-      docker:
-        patterns: ["*"]
-  - package-ecosystem: docker
-    directory: /deploy/tor
-    schedule: { interval: monthly }
-    open-pull-requests-limit: 5
-    groups:
-      docker-tor:
-        patterns: ["*"]
+    directories: ["/deploy/docker", "/deploy/tor"]
+    patterns: ["*"]
+    multi-ecosystem-group: dependances
