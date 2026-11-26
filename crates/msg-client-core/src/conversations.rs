@@ -1002,11 +1002,8 @@ impl Client {
                             Some(current) => sender.username == current,
                             None => sender.username == admin,
                         };
-                        let is_member = self
-                            .mls
-                            .members(&group_id)
-                            .map(|m| usernames(&m).contains(&admin))
-                            .unwrap_or(false);
+                        let is_member =
+                            self.mls.members(&group_id).map(|m| usernames(&m).contains(&admin)).unwrap_or(false);
                         if !authorized || !is_member {
                             return Err(ClientError::Verification(
                                 sender.username,
