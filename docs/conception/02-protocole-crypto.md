@@ -8,9 +8,9 @@
 |---|---|---|
 | Groupes et 1-à-1 | MLS RFC 9420 | `openmls` 0.9 |
 | KEM (HPKE) | Hybride ML-KEM-768 + X25519, repli X25519 | `openmls_rust_crypto` (RustCrypto : `ml-kem`, `x25519-dalek`) |
-| AEAD messages | ChaCha20-Poly1305 (suite MLS) | idem |
+| AEAD messages | AES-128-GCM (suite 0x004F) ; ChaCha20-Poly1305 avec la suite de repli 0x0003 | idem |
 | Signatures | Ed25519 | idem / `ed25519-dalek` pour les certificats d'appareil |
-| Pièces jointes | XChaCha20-Poly1305, clé aléatoire par fichier, découpage en blocs de 64 Kio avec construction STREAM | `chacha20poly1305` (RustCrypto) — STREAM via `aead::stream` |
+| Pièces jointes | XChaCha20-Poly1305, clé aléatoire par fichier, AEAD en un seul bloc (25 Mio max., voir §10) | `chacha20poly1305` (RustCrypto) |
 | Hachage / empreintes | SHA-256, SHA-512 | `sha2` |
 | Dérivation mot de passe | Argon2id (m=64 Mio, t=3, p=1 desktop ; ajusté web) | `argon2` |
 | Dérivation de clés | HKDF-SHA256 | `hkdf` |
@@ -82,13 +82,16 @@ Liste exhaustive des endroits où nous assemblons des primitives :
 1. Certificat d'appareil signé par la clé d'identité utilisateur.
 2. Signature des requêtes API (type DPoP).
 3. Enveloppe de la clé maîtresse locale (TPM/DPAPI/Argon2id).
-4. Chiffrement des pièces jointes (clé aléatoire + STREAM) et transport de la clé dans le message MLS.
+4. Chiffrement des pièces jointes (clé aléatoire, AEAD en un bloc) et transport de la clé dans le message MLS.
 5. Calcul du safety number.
 6. Remplissage (padding) des messages par paliers.
 7. *(Phase 3)* Valeur publiée dans le journal Key Transparency : SHA-256 d'un encodage canonique (identité + certificats d'appareils).
 8. *(Phase 3)* Empreinte de liaison d'appareil : SHA-256 tronqué à 80 bits des clés publiques du nouvel appareil, comparée par l'appareil principal.
 9. *(Phase 3)* Instantané chiffré de la base web : XChaCha20-Poly1305, clé aléatoire enveloppée par Argon2id (mêmes primitives que le coffre desktop).
 10. *(Phase 3)* Ticket WebSocket à usage unique (256 bits, haché côté serveur, 30 s) et épinglage TLS par SHA-256 de la clé publique.
+11. *(Phase 4)* Requêtes et réponses signées entre sites, têtes KT signées, dérivation de la clé de site.
+
+Revue effectuée en Phase 5 : [revue des compositions](../securite/revue-crypto.md).
 
 ## 8 bis. Ordonnancement des commits (Phase 2)
 
