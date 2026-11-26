@@ -76,3 +76,10 @@ path = "fuzz_targets/signatures.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "documents"
+path = "fuzz_targets/documents.rs"
+test = false
+doc = false
+bench = false

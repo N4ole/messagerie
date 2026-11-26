@@ -12,6 +12,9 @@
 
 use std::io::Cursor;
 
+pub mod documents;
+pub use documents::{detect_document, sanitize_document, DocumentKind};
+
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
 
@@ -137,6 +140,8 @@ pub fn mime_from_name(name: &str) -> &'static str {
         "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "odt" => "application/vnd.oasis.opendocument.text",
+        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
+        "odp" => "application/vnd.oasis.opendocument.presentation",
         "mp3" => "audio/mpeg",
         "mp4" => "video/mp4",
         _ => "application/octet-stream",

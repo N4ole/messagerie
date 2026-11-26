@@ -499,7 +499,33 @@ async fn attachments_are_cleaned_and_encrypted() {
     assert!(!file.data.windows(4).any(|w| w == b"Exif"));
     image::load_from_memory(&file.data).expect("image valide");
 
-    // Fichier non image : transmis intact, signalé comme non nettoyé.
+    // Document Word : métadonnées supprimées avant chiffrement, contenu conservé.
+    let author = format!("AUTEUR-{}", uuid::Uuid::new_v4().simple());
+    let docx = docx_with_author(&author);
+    let sent = alice.send_file(&c.id, "compte-rendu.docx", docx, None).await.unwrap();
+    assert!(sent.attachment.unwrap().metadata_cleaned);
+    bob.sync().await.unwrap();
+    let m = bob.messages(&c.id, 10).unwrap().last().unwrap().clone();
+    assert!(m.attachment.as_ref().unwrap().metadata_cleaned, "signalé nettoyé chez le destinataire");
+    let got = bob.download_file(&m.id).await.unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(got.data.to_vec())).expect("document valide");
+    let mut all = String::new();
+    for i in 0..z.len() {
+        use std::io::Read;
+        z.by_index(i).unwrap().read_to_string(&mut all).unwrap();
+    }
+    assert!(!all.contains(&author), "auteur transmis au destinataire");
+    assert!(all.contains("Texte du compte rendu"), "contenu conservé");
+
+    // Fichier de code : jamais modifié.
+    let code = b"fn main() { println!(\"bonjour\"); }\n".to_vec();
+    let sent = alice.send_file(&c.id, "main.rs", code.clone(), None).await.unwrap();
+    assert!(!sent.attachment.unwrap().metadata_cleaned);
+    bob.sync().await.unwrap();
+    let id = bob.messages(&c.id, 10).unwrap().last().unwrap().id.clone();
+    assert_eq!(&bob.download_file(&id).await.unwrap().data[..], &code[..]);
+
+    // PDF illisible : impossible à nettoyer, transmis intact et signalé non nettoyé.
     let pdf = b"%PDF-1.7\n% contenu de test\n".repeat(100);
     let sent = alice.send_file(&c.id, "../../rapport.pdf", pdf.clone(), None).await.unwrap();
     let a = sent.attachment.unwrap();
@@ -571,4 +597,28 @@ async fn passkey_second_factor() {
     alice.delete_passkey(id).await.unwrap();
     alice.logout().await.unwrap();
     assert!(Client::login_with_passkey(&alice_cfg, "alice", password(), yubikey).await.is_err());
+}
+
+/// Document Word minimal dont les propriétés et un commentaire portent `author`.
+fn docx_with_author(author: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let parts = [
+        (
+            "[Content_Types].xml",
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#.to_owned(),
+        ),
+        ("docProps/core.xml", format!("<cp:coreProperties><dc:creator>{author}</dc:creator></cp:coreProperties>")),
+        (
+            "word/document.xml",
+            "<w:document><w:body><w:p><w:r><w:t>Texte du compte rendu</w:t></w:r></w:p></w:body></w:document>"
+                .to_owned(),
+        ),
+        ("word/comments.xml", format!(r#"<w:comments><w:comment w:id="0" w:author="{author}"/></w:comments>"#)),
+    ];
+    for (name, xml) in parts {
+        w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(xml.as_bytes()).unwrap();
+    }
+    w.finish().unwrap().into_inner()
 }

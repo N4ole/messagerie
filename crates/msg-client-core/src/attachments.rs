@@ -63,13 +63,21 @@ impl Client {
         }
         let name = sanitize_file_name(file_name);
         let caption = caption.map(|c| c.trim().to_owned()).filter(|c| !c.is_empty());
-        let (bytes, mime, name, thumbnail_b64) = if msg_media::detect(&data).is_some() {
+        let (bytes, mime, name, thumbnail_b64, cleaned) = if msg_media::detect(&data).is_some() {
             let clean = msg_media::sanitize_image(&data).map_err(|e| ClientError::Invalid(e.to_string()))?;
             let name = with_extension(&name, clean.extension);
-            (Zeroizing::new(clean.bytes), clean.mime.to_owned(), name, Some(STANDARD.encode(&clean.thumbnail)))
+            (Zeroizing::new(clean.bytes), clean.mime.to_owned(), name, Some(STANDARD.encode(&clean.thumbnail)), true)
         } else {
             let mime = msg_media::mime_from_name(&name).to_owned();
-            (Zeroizing::new(data), mime, name, None)
+            // PDF, Office, OpenDocument : métadonnées supprimées. Un document
+            // impossible à nettoyer (chiffré, corrompu) part tel quel, signalé
+            // « non nettoyé » ; les autres fichiers ne sont jamais modifiés.
+            match msg_media::sanitize_document(&data) {
+                Ok(Some(clean)) if clean.len() <= attachment::MAX_ATTACHMENT_BYTES => {
+                    (Zeroizing::new(clean), mime, name, None, true)
+                }
+                _ => (Zeroizing::new(data), mime, name, None, false),
+            }
         };
         let enc = attachment::encrypt(&bytes)?;
         let blob_id = self.api.upload_attachment(&enc.blob).await?;
@@ -84,6 +92,7 @@ impl Client {
             // Site qui héberge le blob : les destinataires d'autres sites le
             // récupèrent par l'intermédiaire de leur propre serveur.
             site: self.site.clone(),
+            cleaned,
         };
         let json = serde_json::to_string(&aref).map_err(|e| ClientError::Invalid(e.to_string()))?;
         let app = self

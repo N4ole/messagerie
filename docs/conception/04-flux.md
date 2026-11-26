@@ -114,7 +114,9 @@ flowchart TD
 flowchart LR
   F[Fichier] --> M{Image ?}
   M -- oui --> R["Décodage + ré-encodage<br/>(supprime EXIF/GPS)"] --> T[Miniature]
-  M -- non --> W[Avertissement : métadonnées<br/>internes non nettoyées]
+  M -- non --> D{PDF, Office,<br/>OpenDocument ?}
+  D -- oui --> C["Suppression des métadonnées<br/>(auteur, dates, logiciel, miniature)"] --> E1
+  D -- "non, ou échec" --> W[Avertissement : métadonnées<br/>internes non nettoyées]
   R --> E1[Chiffrement XChaCha20-Poly1305<br/>clé aléatoire K1]
   T --> E2[Chiffrement clé K2]
   W --> E1

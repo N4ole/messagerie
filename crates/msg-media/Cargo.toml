@@ -1,6 +1,6 @@
 [package]
 name = "msg-media"
-description = "Nettoyage des images (suppression EXIF/GPS/XMP par ré-encodage) et miniatures, en Rust sûr."
+description = "Nettoyage des pièces jointes en Rust sûr : images (EXIF/GPS/XMP supprimés par ré-encodage), métadonnées des PDF et documents Office / OpenDocument ; miniatures."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,3 +9,6 @@ publish.workspace = true
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 thiserror.workspace = true
+# Nettoyage des métadonnées des documents (PDF, Office, OpenDocument).
+lopdf = { version = "0.47", default-features = false }
+zip = { version = "9.8", default-features = false, features = ["deflate-flate2"] }

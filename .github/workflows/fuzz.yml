@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [markdown, media, app_message, mls_incoming, api_json, key_transparency, signatures]
+        target: [markdown, media, documents, app_message, mls_incoming, api_json, key_transparency, signatures]
     env:
       # 60 s par cible sur une PR, 30 min lors de la passe hebdomadaire.
       FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '1800' || '60' }}
@@ -40,7 +40,11 @@ jobs:
       - run: cargo install cargo-fuzz --version 0.13.2 --locked
       - name: Fuzzing
         working-directory: fuzz
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=$FUZZ_SECONDS -rss_limit_mb=2048 -timeout=10
+        # Documents d'amorce versionnés (fuzz/seeds/<cible>), s'il y en a.
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          seeds=""; [ -d seeds/${{ matrix.target }} ] && seeds=seeds/${{ matrix.target }}
+          cargo +nightly fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} $seeds -- -max_total_time=$FUZZ_SECONDS -rss_limit_mb=2048 -timeout=10
       - name: Cas de plantage (à reproduire avec cargo fuzz run <cible> <fichier>)
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

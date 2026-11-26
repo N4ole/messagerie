@@ -444,7 +444,7 @@ export function Chat({ session, onLogout }: { session: Session; onLogout: () => 
                 disabled={!canWrite || sending}
                 onClick={() => fileRef.current?.click()}
                 aria-label="Joindre un fichier"
-                title="Joindre un fichier (les métadonnées des images sont supprimées)"
+                title="Joindre un fichier (métadonnées supprimées pour les images, PDF et documents Office ou OpenDocument)"
               >
                 📎
               </button>
