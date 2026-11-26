@@ -46,6 +46,10 @@ pub struct AttachmentRef {
     /// Miniature JPEG (Base64), générée localement, sans métadonnées.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumbnail_b64: Option<String>,
+    /// Site qui héberge le blob chiffré (fédération) ; absent : site de
+    /// l'expéditeur… et du destinataire (même site).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -229,10 +229,13 @@ impl ApiClient {
         Ok(decode::<AttachmentUploadResponse>(resp).await?.blob_id)
     }
 
-    /// Télécharge une pièce jointe chiffrée.
-    pub async fn download_attachment(&self, blob_id: Uuid) -> Result<Vec<u8>> {
-        let resp =
-            self.call_raw(Method::GET, &format!("/v1/attachments/{blob_id}"), b"", "application/octet-stream").await?;
+    /// Télécharge une pièce jointe chiffrée (hébergée par ce site, ou par le
+    /// site de l'expéditeur : relayée par ce serveur).
+    pub async fn download_attachment(&self, blob_id: Uuid, site: Option<&str>) -> Result<Vec<u8>> {
+        let q = site.map(|s| format!("?site={s}")).unwrap_or_default();
+        let resp = self
+            .call_raw(Method::GET, &format!("/v1/attachments/{blob_id}{q}"), b"", "application/octet-stream")
+            .await?;
         if !resp.status().is_success() {
             return decode::<()>(resp).await.map(|_| Vec::new());
         }
@@ -301,31 +304,39 @@ impl ApiClient {
         Ok(self.call::<(), KeyPackageCount>(Method::GET, "/v1/keypackages/count", None).await?.count)
     }
 
+    /// Informations publiques du site (nom, clé de fédération).
+    pub async fn site_info(&self) -> Result<SiteInfo> {
+        self.public::<(), _>(Method::GET, "/v1/site", None).await
+    }
+
     pub async fn directory(&self, username: &str) -> Result<UserDirectoryEntry> {
-        validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
+        parse_address(username).map_err(|e| ClientError::Invalid(e.into()))?;
         self.call::<(), _>(Method::GET, &format!("/v1/users/{username}"), None).await
     }
 
     pub async fn claim(&self, username: &str) -> Result<UserDirectoryEntry> {
-        validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
+        parse_address(username).map_err(|e| ClientError::Invalid(e.into()))?;
         self.call::<(), _>(Method::POST, &format!("/v1/users/{username}/claim"), None).await
     }
 
     /// Réclame des KeyPackages pour certains appareils seulement.
     pub async fn claim_devices(&self, username: &str, devices: &[Uuid]) -> Result<UserDirectoryEntry> {
-        validate_username(username).map_err(|e| ClientError::Invalid(e.into()))?;
+        parse_address(username).map_err(|e| ClientError::Invalid(e.into()))?;
         let list = devices.iter().map(Uuid::to_string).collect::<Vec<_>>().join(",");
         self.call::<(), _>(Method::POST, &format!("/v1/users/{username}/claim?devices={list}"), None).await
     }
 
     // --- Key Transparency ---------------------------------------------------
 
-    pub async fn kt_head(&self) -> Result<KtHead> {
-        self.call::<(), _>(Method::GET, "/v1/kt/head", None).await
+    /// Tête du journal KT de ce site, ou d'un site fédéré (relayée).
+    pub async fn kt_head(&self, site: Option<&str>) -> Result<KtHead> {
+        let q = site.map(|s| format!("?site={s}")).unwrap_or_default();
+        self.call::<(), _>(Method::GET, &format!("/v1/kt/head{q}"), None).await
     }
 
-    pub async fn kt_audit(&self, from: u64, to: u64) -> Result<KtAudit> {
-        self.call::<(), _>(Method::GET, &format!("/v1/kt/audit?from={from}&to={to}"), None).await
+    pub async fn kt_audit(&self, site: Option<&str>, from: u64, to: u64) -> Result<KtAudit> {
+        let q = site.map(|s| format!("&site={s}")).unwrap_or_default();
+        self.call::<(), _>(Method::GET, &format!("/v1/kt/audit?from={from}&to={to}{q}"), None).await
     }
 
     // --- Appareils ------------------------------------------------------------

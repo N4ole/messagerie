@@ -246,11 +246,29 @@ pub(crate) fn check_len(v: &[u8], n: usize, what: &str) -> AppResult<()> {
     }
 }
 
+/// Vérifie un certificat d'appareil. Forme actuelle : signé pour l'adresse
+/// qualifiée `nom@site` (identité non ambiguë entre sites fédérés) ; forme
+/// antérieure à la fédération (nom seul) encore acceptée.
+pub(crate) fn verify_device_cert(
+    (username, site): (&str, &str),
+    mut cert: DeviceCertificate,
+    identity_key: &[u8],
+    signature: &[u8],
+) -> AppResult<()> {
+    cert.username = format!("{username}@{site}");
+    if cert.verify(identity_key, signature).is_ok() {
+        return Ok(());
+    }
+    cert.username = username.to_owned();
+    cert.verify(identity_key, signature).map_err(|_| AppError::bad_request("certificat d'appareil invalide"))
+}
+
 /// Enregistre (ou reconnaît) l'appareil après vérification de son certificat.
 async fn register_device(
     tx: &mut Transaction<'_, Postgres>,
     acc: &AccountRow,
     username: &str,
+    site: &str,
     reg: &DeviceRegistration,
 ) -> AppResult<()> {
     check_len(&reg.identity_key, 32, "clé d'identité")?;
@@ -263,8 +281,7 @@ async fn register_device(
         mls_signature_key: reg.mls_signature_key.clone(),
         created_at: reg.cert_created_at,
     };
-    cert.verify(&reg.identity_key, &reg.cert_signature)
-        .map_err(|_| AppError::bad_request("certificat d'appareil invalide"))?;
+    verify_device_cert((username, site), cert, &reg.identity_key, &reg.cert_signature)?;
     match &acc.identity_key {
         None => {
             sqlx::query("UPDATE accounts SET identity_key = $2 WHERE id = $1")
@@ -365,7 +382,7 @@ pub async fn confirm_totp(
         }
     };
     sqlx::query("UPDATE accounts SET status = 'active' WHERE id = $1").bind(acc.id).execute(&mut *tx).await?;
-    register_device(&mut tx, &acc, &req.username, &req.device).await?;
+    register_device(&mut tx, &acc, &req.username, &st.cfg().site_name, &req.device).await?;
     let s = new_session(&st, &mut tx, req.device.device_id).await?;
     tx.commit().await?;
     super::devices::publish_now(&st).await;
@@ -386,7 +403,7 @@ pub async fn login(State(st): State<AppState>, Json(req): Json<LoginRequest>) ->
             return Err(e);
         }
     };
-    register_device(&mut tx, &acc, &req.username, &req.device).await?;
+    register_device(&mut tx, &acc, &req.username, &st.cfg().site_name, &req.device).await?;
     let s = new_session(&st, &mut tx, req.device.device_id).await?;
     tx.commit().await?;
     super::devices::publish_now(&st).await;

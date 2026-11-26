@@ -5,6 +5,7 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod federation;
 pub mod kt;
 pub mod logging;
 pub mod notify;

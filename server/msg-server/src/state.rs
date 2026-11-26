@@ -25,6 +25,8 @@ pub struct Inner {
     pub hub: broadcast::Sender<Uuid>,
     /// Vérificateur WebAuthn (absent si non configuré).
     pub webauthn: Option<Webauthn>,
+    /// Client HTTP des appels vers les sites pairs (fédération).
+    pub federation_http: reqwest::Client,
     /// Répertoire Key Transparency, chargé à la première utilisation.
     pub kt: tokio::sync::Mutex<Option<msg_kt::KtDirectory>>,
     send_rate: Mutex<HashMap<Uuid, (i64, u32)>>,
@@ -38,6 +40,7 @@ impl AppState {
     pub fn try_new(db: PgPool, cfg: Config) -> anyhow::Result<Self> {
         let secrets = ServerSecrets::derive(&cfg.server_secret);
         let (hub, _) = broadcast::channel(4096);
+        let federation_http = crate::federation::client::http_client(cfg.federation_proxy.as_deref())?;
         let webauthn = match &cfg.webauthn {
             Some(w) => {
                 let origin = url::Url::parse(&w.origin)?;
@@ -57,6 +60,7 @@ impl AppState {
                 secrets,
                 hub,
                 webauthn,
+                federation_http,
                 kt: tokio::sync::Mutex::new(None),
                 send_rate: Mutex::new(HashMap::new()),
             }),

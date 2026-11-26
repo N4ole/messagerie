@@ -2,7 +2,7 @@
 //! sert de capacité : seul un destinataire du message MLS le connaît.
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
@@ -50,16 +50,35 @@ pub async fn upload(
     Ok(Json(AttachmentUploadResponse { blob_id: id }))
 }
 
-pub async fn download(
-    State(st): State<AppState>,
-    Extension(_ctx): Extension<AuthContext>,
-    Path(id): Path<Uuid>,
-) -> AppResult<impl IntoResponse> {
+/// Pièce jointe chiffrée hébergée par ce site.
+pub(crate) async fn load(st: &AppState, id: Uuid) -> AppResult<Vec<u8>> {
     let row: Option<(Vec<u8>,)> = sqlx::query_as("SELECT data FROM attachments WHERE id = $1 AND expires_at > $2")
         .bind(id)
         .bind(crate::now())
         .fetch_optional(st.db())
         .await?;
-    let (data,) = row.ok_or_else(AppError::not_found)?;
+    Ok(row.ok_or_else(AppError::not_found)?.0)
+}
+
+#[derive(serde::Deserialize)]
+pub struct DownloadQuery {
+    /// Site qui héberge la pièce jointe (fédération) ; par défaut ce site.
+    site: Option<String>,
+}
+
+pub async fn download(
+    State(st): State<AppState>,
+    Extension(_ctx): Extension<AuthContext>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<DownloadQuery>,
+) -> AppResult<impl IntoResponse> {
+    let data = match q.site.as_deref().filter(|s| *s != st.cfg().site_name) {
+        None => load(&st, id).await?,
+        // Pièce jointe d'un expéditeur d'un autre site : relayée par ce serveur.
+        Some(site) => {
+            let peer = crate::federation::peer(&st, site)?;
+            crate::federation::client::get_bytes(&st, &peer, &format!("/v1/federation/attachments/{id}")).await?
+        }
+    };
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], data))
 }

@@ -81,6 +81,9 @@ impl Client {
             key_hex: hex::encode(*enc.key),
             sha256_hex: hex::encode(enc.sha256),
             thumbnail_b64,
+            // Site qui héberge le blob : les destinataires d'autres sites le
+            // récupèrent par l'intermédiaire de leur propre serveur.
+            site: self.site.clone(),
         };
         let json = serde_json::to_string(&aref).map_err(|e| ClientError::Invalid(e.to_string()))?;
         let app = self
@@ -110,7 +113,10 @@ impl Client {
             .ok()
             .and_then(|k| k.try_into().ok())
             .ok_or_else(|| ClientError::Invalid("empreinte invalide".into()))?;
-        let blob = self.api.download_attachment(aref.blob_id).await?;
+        let blob = self
+            .api
+            .download_attachment(aref.blob_id, aref.site.as_deref().filter(|s| Some(*s) != self.site.as_deref()))
+            .await?;
         let data = attachment::decrypt(&blob, &key, &sha, aref.size)?;
         self.persist_tokens()?;
         Ok(DownloadedFile { name: sanitize_file_name(&aref.name), mime: aref.mime, data })

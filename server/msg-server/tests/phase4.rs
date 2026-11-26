@@ -42,7 +42,177 @@ async fn two_instances_share_notifications_and_key_transparency() {
     let conv_c = bob.start_conversation("carol").await.unwrap();
     assert_eq!(conv_c.peer, "carol");
     bob.kt_check_self().await.unwrap();
-    let h1 = admin.api().kt_head().await.unwrap();
-    let h2 = bob.api().kt_head().await.unwrap();
+    let h1 = admin.api().kt_head(None).await.unwrap();
+    let h2 = bob.api().kt_head(None).await.unwrap();
     assert_eq!((h1.epoch, h1.root_hash), (h2.epoch, h2.root_hash), "même journal sur les deux instances");
+}
+
+/// Synchronise jusqu'à voir un message contenant `text` (remise fédérée asynchrone).
+async fn wait_for(c: &mut Client, conv: &str, text: &str) {
+    for _ in 0..50 {
+        c.sync().await.unwrap();
+        if c.messages(conv, 50).map(|m| m.iter().any(|m| m.text == text)).unwrap_or(false) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    panic!("message « {text} » non reçu");
+}
+
+/// Fédération : deux sites, chacun ses comptes ; conversation chiffrée de
+/// bout en bout entre `alice@site-a` et `bob@site-b`, relayée par les
+/// serveurs (annuaire, KeyPackages, KT, messages, pièces jointes), avec
+/// remise différée pendant une coupure du site distant.
+#[tokio::test(flavor = "multi_thread")]
+async fn federated_sites_exchange_messages_with_store_and_forward() {
+    let (mut a, mut b) = common::spawn_federated().await;
+    let admin_a = a.admin().await;
+    let admin_b = b.admin().await;
+    let (mut alice, _, _) = a.user(&admin_a, "alice").await;
+    let (mut bob, _, _) = b.user(&admin_b, "bob").await;
+    assert_eq!(alice.address(), "alice@site-a");
+    assert_eq!(bob.address(), "bob@site-b");
+
+    // Alice ouvre une conversation avec un utilisateur d'un autre site.
+    let conv = alice.start_conversation("bob@site-b").await.unwrap();
+    assert_eq!(conv.peer, "bob@site-b");
+    alice.send_text(&conv.id, "bonjour de site-a").await.unwrap();
+    wait_for(&mut bob, &conv.id, "bonjour de site-a").await;
+    let seen_by_bob = bob.conversation(&conv.id).unwrap();
+    assert_eq!(seen_by_bob.peer, "alice@site-a", "l'utilisateur distant est affiché avec son site");
+
+    // Réponse dans l'autre sens.
+    bob.send_text(&conv.id, "bonjour de site-b").await.unwrap();
+    wait_for(&mut alice, &conv.id, "bonjour de site-b").await;
+
+    // Numéros de sécurité identiques des deux côtés (adresses qualifiées).
+    let sa = alice.safety_number("bob@site-b").unwrap();
+    let sb = bob.safety_number("alice@site-a").unwrap();
+    assert_eq!(sa.number, sb.number);
+
+    // Pièce jointe hébergée par site-a, récupérée par Bob via son serveur.
+    let pdf = b"%PDF-1.4 document de test\n".repeat(50);
+    let sent = alice.send_file(&conv.id, "note.pdf", pdf.clone(), None).await.unwrap();
+    let mut got = None;
+    for _ in 0..50 {
+        bob.sync().await.unwrap();
+        if let Some(m) = bob.messages(&conv.id, 50).unwrap().into_iter().find(|m| m.attachment.is_some()) {
+            got = Some(m);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let m = got.expect("pièce jointe reçue");
+    assert!(sent.attachment.is_some());
+    let file = bob.download_file(&m.id).await.unwrap();
+    assert_eq!(&file.data[..], &pdf[..]);
+
+    // Coupure de site-b : le message reste en file chez site-a…
+    b.down.store(true, std::sync::atomic::Ordering::SeqCst);
+    alice.send_text(&conv.id, "pendant la coupure").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    msg_server::federation::outbox::deliver_due(&a.state).await.unwrap();
+    let (queued,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM federation_outbox").fetch_one(&a.pool).await.unwrap();
+    assert_eq!(queued, 1, "message conservé dans la file");
+    let (attempts,): (i32,) =
+        sqlx::query_as("SELECT attempts FROM federation_outbox").fetch_one(&a.pool).await.unwrap();
+    assert!(attempts >= 1);
+    // …puis remis au retour du site (ré-émission).
+    b.down.store(false, std::sync::atomic::Ordering::SeqCst);
+    sqlx::query("UPDATE federation_outbox SET next_attempt_at = 0").execute(&a.pool).await.unwrap();
+    assert_eq!(msg_server::federation::outbox::deliver_due(&a.state).await.unwrap(), 1);
+    wait_for(&mut bob, &conv.id, "pendant la coupure").await;
+    // Ré-émission d'un message déjà remis : idempotente côté site-b.
+    let (blobs_before,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM blobs").fetch_one(&b.pool).await.unwrap();
+
+    // Témoin KT : site-a vérifie le journal de site-b (têtes signées, ajout seul).
+    let peer_b = a.server_cfg.federation_peers[0].clone();
+    use msg_server::federation::witness::{check_peer, Witnessed};
+    assert!(matches!(check_peer(&a.state, &peer_b).await.unwrap(), Witnessed::Ok { .. }));
+    let (_carol, _, _) = b.user(&admin_b, "carol").await;
+    assert!(matches!(check_peer(&a.state, &peer_b).await.unwrap(), Witnessed::Ok { .. }));
+    // Racine mémorisée falsifiée : incohérence détectée.
+    sqlx::query("UPDATE kt_witness SET root_hash = $1").bind(vec![0u8; 32]).execute(&a.pool).await.unwrap();
+    assert_eq!(check_peer(&a.state, &peer_b).await.unwrap(), Witnessed::Inconsistent);
+
+    // Site inconnu (hors liste blanche) : refus.
+    assert!(alice.start_conversation("dave@site-x").await.is_err());
+
+    // Aucun clair dans les bases des deux sites.
+    for s in [&a, &b] {
+        let dump = s.dump().await;
+        for needle in ["bonjour de site-a", "bonjour de site-b", "pendant la coupure", "note.pdf", "document de test"] {
+            assert!(!dump.contains(needle), "« {needle} » trouvé en clair");
+        }
+    }
+    let (blobs_after,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM blobs").fetch_one(&b.pool).await.unwrap();
+    assert!(blobs_after <= blobs_before);
+}
+
+/// Requêtes entre sites : signature exigée, clé épinglée, nonce à usage unique.
+#[tokio::test(flavor = "multi_thread")]
+async fn federation_requests_are_authenticated() {
+    let (a, b) = common::spawn_federated().await;
+    let http = reqwest::Client::new();
+    let body = serde_json::to_vec(&msg_proto::FederationDeliver {
+        message_id: uuid::Uuid::new_v4(),
+        devices: vec![uuid::Uuid::new_v4()],
+        payload: vec![1, 2, 3],
+    })
+    .unwrap();
+    let send = |key: &msg_crypto::identity::SigningKeyPair, site: &str| {
+        let h = msg_crypto::request::sign_site_request(
+            key,
+            site,
+            "POST",
+            "/v1/federation/deliver",
+            &body,
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64,
+        )
+        .unwrap();
+        http.post(format!("{}/v1/federation/deliver", b.url))
+            .header("x-msg-site", h.device)
+            .header("x-msg-timestamp", h.timestamp)
+            .header("x-msg-nonce", h.nonce)
+            .header("x-msg-signature", h.signature)
+            .header("content-type", "application/json")
+            .body(body.clone())
+    };
+    // Clé quelconque se prétendant site-a : refus.
+    let forged = msg_crypto::identity::SigningKeyPair::generate().unwrap();
+    assert_eq!(send(&forged, "site-a").send().await.unwrap().status(), 401);
+    // Site absent de la liste blanche : refus.
+    assert_eq!(send(&forged, "site-x").send().await.unwrap().status(), 401);
+    // Vraie clé de site-a : accepté (réponse signée par site-b), rejeu refusé.
+    let key_a = msg_server::federation::signing_key(&a.state).unwrap();
+    let req = send(&key_a, "site-a").build().unwrap();
+    let replay = req.try_clone().unwrap();
+    let resp = http.execute(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(resp.headers().contains_key("x-msg-site-response"));
+    assert_eq!(http.execute(replay).await.unwrap().status(), 401, "nonce déjà utilisé");
+    // Un site ne sert que ses propres utilisateurs.
+    let h = msg_crypto::request::sign_site_request(
+        &key_a,
+        "site-a",
+        "GET",
+        "/v1/federation/users/bob@site-c",
+        b"",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64,
+    )
+    .unwrap();
+    let r = http
+        .get(format!("{}/v1/federation/users/bob@site-c", b.url))
+        .header("x-msg-site", h.device)
+        .header("x-msg-timestamp", h.timestamp)
+        .header("x-msg-nonce", h.nonce)
+        .header("x-msg-signature", h.signature)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
+    // Informations publiques du site : nom et clé à épingler.
+    let info: msg_proto::SiteInfo = http.get(format!("{}/v1/site", b.url)).send().await.unwrap().json().await.unwrap();
+    assert_eq!(info.name, "site-b");
+    assert_eq!(info.federation_key, a.server_cfg.federation_peers[0].public_key.to_vec());
 }

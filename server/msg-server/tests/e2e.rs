@@ -140,9 +140,15 @@ async fn authentication_rules() {
     let too_short = &password()[..11];
     assert!(Client::activate(&cfg, "dave", &r.activation_code, too_short).await.is_err());
 
-    // Rejeu du code TOTP déjà utilisé à l'enrôlement : refusé.
+    // Rejeu du code TOTP déjà utilisé à l'enrôlement (même pas de temps,
+    // lu en base pour ne pas dépendre de l'horloge) : refusé.
     drop(alice);
-    let e = Client::login(&alice_cfg, "alice", password(), Some(&totp_code(&alice_totp, 0))).await.err().unwrap();
+    let (step,): (Option<i64>,) = sqlx::query_as("SELECT totp_last_step FROM accounts WHERE username = 'alice'")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    let used = common::totp_code_at(&alice_totp, step.unwrap() * 30);
+    let e = Client::login(&alice_cfg, "alice", password(), Some(&used)).await.err().unwrap();
     assert_eq!(e.api_code(), Some(ErrorCode::InvalidCredentials));
 
     // Suspension : sessions révoquées, connexion refusée.

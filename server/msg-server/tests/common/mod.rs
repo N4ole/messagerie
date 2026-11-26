@@ -56,6 +56,10 @@ pub struct TestServer {
     pub dirs: Vec<tempfile::TempDir>,
     /// Configuration du serveur (même secret), pour simuler un redémarrage.
     pub server_cfg: Config,
+    /// État du serveur (tâches de fédération déclenchées par les tests).
+    pub state: AppState,
+    /// Simule une panne du site (toutes les requêtes reçoivent 503).
+    pub down: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub async fn spawn() -> TestServer {
@@ -65,6 +69,77 @@ pub async fn spawn() -> TestServer {
 /// Serveur avec WebAuthn activé (origine `http://localhost:<port>`).
 pub async fn spawn_webauthn() -> TestServer {
     spawn_with(true).await
+}
+
+async fn new_database() -> PgPool {
+    let base = std::env::var("DATABASE_URL").expect(
+        "DATABASE_URL doit pointer vers un PostgreSQL de test (ex. postgres://postgres@127.0.0.1:5433/postgres)",
+    );
+    let admin = PgPoolOptions::new().max_connections(2).connect(&base).await.expect("connexion PostgreSQL");
+    let name = format!("msgtest_{}", uuid::Uuid::new_v4().simple());
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}"))).execute(&admin).await.unwrap();
+    let mut url = url::Url::parse(&base).unwrap();
+    url.set_path(&name);
+    let pool = PgPoolOptions::new().max_connections(10).connect(url.as_str()).await.unwrap();
+    msg_server::migrate(&pool).await.unwrap();
+    pool
+}
+
+fn serve(listener: tokio::net::TcpListener, st: AppState, down: Arc<std::sync::atomic::AtomicBool>) {
+    let flag = down.clone();
+    let app = router(st).layer(axum::middleware::from_fn(
+        move |req: axum::extract::Request, next: axum::middleware::Next| {
+            let flag = flag.clone();
+            async move {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    return axum::response::IntoResponse::into_response(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+                }
+                next.run(req).await
+            }
+        },
+    ));
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+}
+
+/// Deux sites fédérés (« site-a » et « site-b »), chacun avec sa base, son
+/// secret et sa clé de fédération, inscrits dans la liste blanche de l'autre.
+pub async fn spawn_federated() -> (TestServer, TestServer) {
+    logs();
+    let names = ["site-a", "site-b"];
+    let mut listeners = Vec::new();
+    let mut secrets = Vec::new();
+    for _ in names {
+        listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+        secrets.push(msg_crypto::random_bytes::<32>().unwrap());
+    }
+    let urls: Vec<String> = listeners.iter().map(|l| format!("http://{}", l.local_addr().unwrap())).collect();
+    let keys: Vec<[u8; 32]> = secrets
+        .iter()
+        .map(|s| {
+            let seed = msg_server::secrets::ServerSecrets::derive(s).federation_seed;
+            msg_crypto::identity::SigningKeyPair::from_secret_bytes(seed.as_ref()).unwrap().public_bytes()
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (i, listener) in listeners.into_iter().enumerate() {
+        let j = 1 - i;
+        let pool = new_database().await;
+        let mut cfg = Config::with_secret(names[i].into(), secrets[i]);
+        cfg.argon2_m_kib = 64;
+        cfg.argon2_t = 1;
+        cfg.federation_peers = vec![msg_server::config::FederationPeer {
+            name: names[j].into(),
+            url: urls[j].clone(),
+            public_key: keys[j],
+        }];
+        let state = AppState::try_new(pool.clone(), cfg.clone()).expect("configuration");
+        let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        serve(listener, state.clone(), down.clone());
+        out.push(TestServer { url: urls[i].clone(), pool, dirs: Vec::new(), server_cfg: cfg, state, down });
+    }
+    let b = out.pop().unwrap();
+    let a = out.pop().unwrap();
+    (a, b)
 }
 
 async fn spawn_with(webauthn: bool) -> TestServer {
@@ -89,9 +164,23 @@ async fn spawn_with(webauthn: bool) -> TestServer {
         cfg.webauthn = Some(msg_server::config::WebauthnConfig { rp_id: "localhost".into(), origin: url.clone() });
     }
     let server_cfg = cfg.clone();
-    let app = router(AppState::try_new(pool.clone(), cfg).expect("configuration"));
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    TestServer { url, pool, dirs: Vec::new(), server_cfg }
+    let state = AppState::try_new(pool.clone(), cfg).expect("configuration");
+    let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    serve(listener, state.clone(), down.clone());
+    TestServer { url, pool, dirs: Vec::new(), server_cfg, state, down }
+}
+
+/// Code TOTP pour un instant donné (secondes Unix).
+pub fn totp_code_at(base32: &str, unix: i64) -> String {
+    let secret = Secret::try_from_base32(base32).unwrap();
+    let t = Builder::new()
+        .with_algorithm(Algorithm::SHA1)
+        .with_digits(6)
+        .with_step_duration(30)
+        .with_secret(secret)
+        .build()
+        .unwrap();
+    t.generate(unix as u64).to_string()
 }
 
 pub fn totp_code(base32: &str, offset_steps: i64) -> String {
