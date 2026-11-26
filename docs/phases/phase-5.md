@@ -45,6 +45,7 @@ docs/conception/02-protocole-crypto.md, docs/adr/0015, guides, README, ce rappor
 
 | Suite | Nombre | Nouveautés Phase 5 |
 |---|---|---|
+| `msg-media` | 7 (+1) | bombe de décompression refusée avant décodage (cas trouvé par le fuzzing) |
 | `msg-crypto` | 30 (+1) | paramètres Argon2 hors bornes refusés à l'ouverture d'une enveloppe |
 | `msg-platform-win` | 2 (+1, et +1 sous Windows) | fichier non signé reconnu ; sous Windows, binaire système signé jamais vu « altéré » |
 | `messagerie-desktop` | 4 (+1) | empreinte SHA-256 ; blocage réservé aux signatures altérées |
@@ -84,7 +85,13 @@ Fuzzing (`fuzz/`, libFuzzer) — passe locale de 5 minutes par cible, **aucun pl
 | `key_transparency` | preuves KT forgées (recherche, ajout seul) | 12,2 M |
 | `signatures` | en-têtes de signature d'appareils et de sites | 8,1 M |
 
-Le premier cas trouvé (`markdown`) était un faux positif de l'assertion (`javascript:` dans
+**Trouvé par le fuzzing en CI (`media`)** : un GIF de 150 octets annonçant 11 308 × 11 308 px
+passait les limites existantes (côté ≤ 12 000 px, 512 Mio) et coûtait ≈ 512 Mio et 0,8 s de
+décodage (bombe de décompression ; côté expéditeur uniquement, car seul l'expéditeur nettoie
+les images). Corrigé : plafond de 50 Mpx vérifié **avant** le décodage, mémoire de décodage
+ramenée à 256 Mio ; le cas est conservé comme test de régression.
+
+Le premier cas trouvé en local (`markdown`) était un faux positif de l'assertion (`javascript:` dans
 du **texte**, affiché tel quel) : l'assertion porte désormais sur les URL des liens. En CI :
 60 s par cible sur chaque PR touchant un parseur, 30 min par cible chaque semaine.
 

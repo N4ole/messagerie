@@ -50,7 +50,10 @@ préfixée. C'est sans ambiguïté ici, car le seul champ libre (le chemin) ne
 peut pas contenir de saut de ligne (refusé par le serveur HTTP) et les
 autres ont un format fixe (entier, Base64, UUID, nom de site validé,
 empreinte hexadécimale). À conserver en cas d'évolution (tout nouveau champ
-libre devra être préfixé par sa longueur). Testé : `tests/phase5.rs`
+libre devra être préfixé par sa longueur). Toutes les vérifications Ed25519
+utilisent la forme **stricte** (`verify_strict` : clés d'ordre faible et
+signatures malléables refusées) ; le fuzzing `signatures` laisse le fuzzer
+choisir la clé publique et exige le refus. Testé : `tests/phase5.rs`
 (route, paramètres, méthode), `e2e.rs` (rejeu, corps, horodatage), fuzzing
 `signatures`.
 
