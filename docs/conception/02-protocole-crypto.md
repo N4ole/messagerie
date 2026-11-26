@@ -110,7 +110,15 @@ proposition `Update`.
 
 ## 10. Pièces jointes
 
-1. Lecture du fichier → si image : **décodage + ré-encodage** par `msg-media` (supprime EXIF/GPS/XMP/IPTC/profils, corrige l'orientation) ; autres formats : envoyés tels quels, l'UI avertit que les métadonnées internes (PDF, DOCX…) ne sont pas nettoyées.
+1. Lecture du fichier → si image : **décodage + ré-encodage** par `msg-media` (supprime EXIF/GPS/XMP/IPTC/profils, corrige l'orientation) ; si PDF, document Office Open XML (docx, xlsx, pptx…) ou OpenDocument (odt, ods, odp…), reconnu par son contenu : **métadonnées supprimées** (voir ci-dessous) ; autres formats (zip, code, vidéo…) : envoyés tels quels, l'UI indique « métadonnées internes non nettoyées ».
+
+   Nettoyage des documents (`msg-media::documents`, bibliothèques `lopdf` et `zip`) :
+   - PDF : dictionnaire `Info` (auteur, titre, logiciels, dates), métadonnées XMP (catalogue, pages, images), `PieceInfo`, identifiant `ID`, auteur et dates des annotations ; fichier entièrement réécrit (les révisions antérieures disparaissent). PDF chiffré : non modifié, signalé non nettoyé.
+   - Office : propriétés (`docProps/core.xml`, `app.xml`, `custom.xml` : auteur, société, modèle, dates, propriétés personnalisées) vidées, miniature supprimée, auteurs, initiales, identifiants et dates des commentaires et des modifications suivies anonymisés.
+   - OpenDocument : `meta.xml` vidé, miniature supprimée, auteurs et dates des annotations et modifications suivies anonymisés, imprimante retirée des réglages.
+   - Archives Office/OpenDocument : dates des entrées remises au 1er janvier 1980, champs supplémentaires (horodatages étendus, propriétaire) supprimés ; limites contre les bombes ZIP (200 Mio décompressés, 10 000 entrées).
+   - Le contenu visible n'est jamais modifié ; un document impossible à nettoyer (chiffré, corrompu) part tel quel et est **signalé non nettoyé** à l'expéditeur comme au destinataire.
+   - Non couvert : formats binaires anciens (`.doc`, `.xls`, `.ppt`), RTF, métadonnées **à l'intérieur** des images incorporées dans un document (EXIF d'une photo collée dans un PDF ou un docx), parties XML personnalisées (`customXml/`, ex. SharePoint), texte du document lui-même.
 2. Génération de la miniature côté client.
 3. Chiffrement du fichier (XChaCha20-Poly1305, clé aléatoire par fichier, AEAD en un seul bloc, 25 Mio max.) ; la miniature voyage dans le message MLS lui-même (donc chiffrée par MLS).
 4. Upload des blobs (nom aléatoire côté serveur, taille arrondie au palier supérieur).

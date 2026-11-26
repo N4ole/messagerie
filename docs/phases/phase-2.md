@@ -98,7 +98,8 @@ Inchangées (voir [rapport de Phase 1](phase-1.md#4-commandes)). Nouvelles varia
    longtemps hors ligne affichera donc le message plus tard que les autres. Le serveur, lui, ne
    connaît pas le délai (il est chiffré) et supprime le blob dès sa distribution.
 4. **Pièces jointes non images** (PDF, Office, vidéo) : **métadonnées internes non nettoyées**
-   (auteur, logiciel, historique). L'interface l'indique.
+   (auteur, logiciel, historique). L'interface l'indique. *(Levée après la Phase 5 pour les PDF,
+   documents Office et OpenDocument : voir le [protocole](../conception/02-protocole-crypto.md#10-pièces-jointes).)*
 5. **Administrateur de groupe unique** : s'il disparaît, le groupe ne peut plus évoluer
    (ajout, retrait, rotation) ; il ne peut pas quitter son groupe. Transfert d'administration et
    ordonnancement des commits par le serveur : Phase 4.

@@ -369,7 +369,9 @@ impl Client {
         let ast = msg_markdown::parse(&m.body);
         let attachment = m.attachment.as_deref().and_then(|j| serde_json::from_str::<AttachmentRef>(j).ok()).map(|a| {
             AttachmentView {
-                metadata_cleaned: a.mime == "image/jpeg" || a.mime == "image/png",
+                // Messages antérieurs au champ `cleaned` : seules les images
+                // (ré-encodées en JPEG ou PNG) étaient nettoyées.
+                metadata_cleaned: a.cleaned || a.mime == "image/jpeg" || a.mime == "image/png",
                 name: a.name,
                 mime: a.mime,
                 size: a.size,

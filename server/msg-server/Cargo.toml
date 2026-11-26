@@ -53,3 +53,4 @@ reqwest.workspace = true
 tempfile = "3"
 url = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+zip = { version = "9.8", default-features = false, features = ["deflate-flate2"] }

@@ -50,6 +50,10 @@ pub struct AttachmentRef {
     /// l'expéditeur… et du destinataire (même site).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site: Option<String>,
+    /// Métadonnées nettoyées par l'expéditeur avant envoi (images, PDF,
+    /// documents Office et OpenDocument). Absent dans les messages antérieurs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cleaned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
